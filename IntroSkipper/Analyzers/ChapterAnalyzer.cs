@@ -8,7 +8,6 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using IntroSkipper.Configuration;
 using IntroSkipper.Data;
-using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace IntroSkipper.Analyzers;

@@ -11,15 +11,13 @@
 
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Xml.Serialization;
-using MediaBrowser.Model.Plugins;
 
 namespace IntroSkipper.Configuration;
 
 /// <summary>
 /// Plugin configuration.
 /// </summary>
-public class PluginConfiguration : BasePluginConfiguration
+public class PluginConfiguration
 {
     /// <summary>
     /// Default percentage of each episode's audio track to analyze.
@@ -379,8 +377,7 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>
     /// Gets or sets a value indicating whether the File Transformation plugin is enabled.
-    /// This value is set by the Plugin during initialization.
+    /// Set at runtime; not serialised to disk.
     /// </summary>
-    [XmlIgnore]
     public bool FileTransformationPluginEnabled { get; set; }
 }

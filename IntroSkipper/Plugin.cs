@@ -1,27 +1,14 @@
 // SPDX-FileCopyrightText: 2019 dkanada
-// SPDX-FileCopyrightText: 2019 Phallacy
-// SPDX-FileCopyrightText: 2021 Cody Robibero
 // SPDX-FileCopyrightText: 2022-2023 ConfusedPolarBear
 // SPDX-FileCopyrightText: 2024-2026 Kilian von Pflugk
 // SPDX-FileCopyrightText: 2024-2026 rlauuzo
 // SPDX-FileCopyrightText: 2024-2026 AbandonedCart
-// SPDX-FileCopyrightText: 2024 theMasterpc
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Collections.Concurrent;
 using IntroSkipper.Configuration;
 using IntroSkipper.Data;
 using IntroSkipper.Db;
-using Jellyfin.Database.Implementations.Enums;
-using MediaBrowser.Common.Configuration;
-using MediaBrowser.Common.Plugins;
-using MediaBrowser.Controller.Chapters;
-using MediaBrowser.Controller.Configuration;
-using MediaBrowser.Controller.Entities;
-using MediaBrowser.Controller.Library;
-using MediaBrowser.Model.Entities;
-using MediaBrowser.Model.Plugins;
-using MediaBrowser.Model.Serialization;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -29,15 +16,13 @@ using Microsoft.Extensions.Logging;
 namespace IntroSkipper;
 
 /// <summary>
-/// Intro skipper plugin. Uses audio analysis to find common sequences of audio shared between episodes.
+/// Standalone intro/credits detection service — Jellyfin dependency removed.
+/// Provides database access and configuration for the analysis pipeline.
 /// </summary>
-public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
+public partial class Plugin
 {
     private const double SegmentComparisonEpsilon = 0.001;
     private const int SqliteParameterBatchSize = 500;
-    private readonly ILibraryManager _libraryManager;
-    private readonly IChapterManager _chapterRepository;
-    private readonly IPluginManager _pluginManager;
     private readonly ILogger<Plugin> _logger;
     private readonly string _dbPath;
     private readonly string _cacheDbPath;
@@ -45,48 +30,30 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// <summary>
     /// Initializes a new instance of the <see cref="Plugin"/> class.
     /// </summary>
-    /// <param name="applicationPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
-    /// <param name="xmlSerializer">Instance of the <see cref="IXmlSerializer"/> interface.</param>
-    /// <param name="serverConfiguration">Server configuration manager.</param>
-    /// <param name="libraryManager">Library manager.</param>
-    /// <param name="chapterRepository">Chapter repository.</param>
-    /// <param name="pluginManager">Plugin manager.</param>
+    /// <param name="dataDirectory">Directory where databases are stored.</param>
+    /// <param name="ffmpegPath">Full path to the ffmpeg executable.</param>
+    /// <param name="configuration">Plugin configuration.</param>
     /// <param name="logger">Logger.</param>
     public Plugin(
-        IApplicationPaths applicationPaths,
-        IXmlSerializer xmlSerializer,
-        IServerConfigurationManager serverConfiguration,
-        ILibraryManager libraryManager,
-        IChapterManager chapterRepository,
-        IPluginManager pluginManager,
+        string dataDirectory,
+        string ffmpegPath,
+        PluginConfiguration configuration,
         ILogger<Plugin> logger)
-        : base(applicationPaths, xmlSerializer)
     {
         Instance = this;
-
-        _libraryManager = libraryManager;
-        _chapterRepository = chapterRepository;
-        _pluginManager = pluginManager;
         _logger = logger;
 
-        FFmpegPath = serverConfiguration.GetEncodingOptions().EncoderAppPathDisplay;
+        Configuration = configuration;
+        FFmpegPath = ffmpegPath;
 
-        ArgumentNullException.ThrowIfNull(applicationPaths);
+        Directory.CreateDirectory(dataDirectory);
 
-        var pluginDirName = "introskipper";
-        var pluginCachePath = "chromaprints";
+        var pluginCachePath = Path.Join(dataDirectory, "chromaprints");
+        FingerprintCachePath = pluginCachePath;
 
-        var introsDirectory = Path.Join(applicationPaths.DataPath, pluginDirName);
-        FingerprintCachePath = Path.Join(introsDirectory, pluginCachePath);
+        _dbPath = Path.Join(dataDirectory, "introskipper.db");
+        _cacheDbPath = Path.Join(dataDirectory, "introskipper-cache.db");
 
-        _dbPath = Path.Join(introsDirectory, "introskipper.db");
-        _cacheDbPath = Path.Join(introsDirectory, "introskipper-cache.db");
-
-        // Create the base directories (if needed).
-        // Directory.CreateDirectory is already a no-op when the directory exists, so we can call it unconditionally without checking first.
-        Directory.CreateDirectory(introsDirectory);
-
-        // Initialize segment database.
         try
         {
             using var db = CreateDbContext();
@@ -97,7 +64,6 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             LogDatabaseInitializationError(_logger, ex);
         }
 
-        // Initialize detection cache database.
         try
         {
             using var cacheDb = CreateCacheDbContext();
@@ -107,70 +73,43 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         {
             LogCacheDbInitializationError(_logger, ex);
         }
-
-        Configuration.FileTransformationPluginEnabled = _pluginManager
-            .Plugins
-            .Any(p => p.Id == Guid.Parse("5e87cc92-571a-4d8d-8d98-d2d4147f9f90")); // File Transformation plugin ID
     }
 
-    /// <summary>
-    /// Gets the path to the segment database.
-    /// </summary>
+    /// <summary>Gets the plugin singleton.</summary>
+    public static Plugin? Instance { get; private set; }
+
+    /// <summary>Gets or sets the active configuration.</summary>
+    public PluginConfiguration Configuration { get; set; }
+
+    /// <summary>Gets the full path to the ffmpeg executable.</summary>
+    public string FFmpegPath { get; private set; }
+
+    /// <summary>Gets the directory used to cache fingerprints.</summary>
+    public string FingerprintCachePath { get; private set; }
+
+    /// <summary>Gets the path to the segment database.</summary>
     public string DbPath => _dbPath;
 
-    /// <summary>
-    /// Gets the path to the detection cache database.
-    /// </summary>
+    /// <summary>Gets the path to the detection cache database.</summary>
     public string CacheDbPath => _cacheDbPath;
 
-    /// <summary>
-    /// Gets or sets a value indicating whether to analyze again.
-    /// </summary>
+    /// <summary>Gets or sets a value indicating whether to re-analyze already-analyzed episodes.</summary>
     public bool AnalyzeAgain { get; set; }
 
     internal bool LegacyFingerprintMigrationDone { get; set; }
 
-    /// <summary>
-    /// Gets the most recent media item queue.
-    /// </summary>
+    /// <summary>Gets the most recent media item queue.</summary>
     public ConcurrentDictionary<Guid, List<QueuedEpisode>> QueuedMediaItems { get; } = new();
 
-    /// <summary>
-    /// Gets or sets the total number of episodes in the queue.
-    /// </summary>
+    /// <summary>Gets or sets the total number of episodes in the queue.</summary>
     public int TotalQueued { get; set; }
 
-    /// <summary>
-    /// Gets or sets the number of seasons in the queue.
-    /// </summary>
+    /// <summary>Gets or sets the number of seasons in the queue.</summary>
     public int TotalSeasons { get; set; }
 
     /// <summary>
-    /// Gets the directory to cache fingerprints in.
+    /// Creates a new <see cref="IntroSkipperDbContext"/> for the segment database.
     /// </summary>
-    public string FingerprintCachePath { get; private set; }
-
-    /// <summary>
-    /// Gets the full path to FFmpeg.
-    /// </summary>
-    public string FFmpegPath { get; private set; }
-
-    /// <inheritdoc />
-    public override string Name => "Intro Skipper";
-
-    /// <inheritdoc />
-    public override Guid Id => Guid.Parse("c83d86bb-a1e0-4c35-a113-e2101cf4ee6b");
-
-    /// <summary>
-    /// Gets the plugin instance.
-    /// </summary>
-    public static Plugin? Instance { get; private set; }
-
-    /// <summary>
-    /// Creates a new <see cref="IntroSkipperDbContext"/> instance configured for the plugin database.
-    /// </summary>
-    /// <returns>A new <see cref="IntroSkipperDbContext"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when the plugin has not been initialized.</exception>
     public static IntroSkipperDbContext CreateDbContext()
     {
         ArgumentNullException.ThrowIfNull(Instance);
@@ -178,47 +117,21 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     }
 
     /// <summary>
-    /// Creates a new <see cref="DetectionCacheDbContext"/> instance configured for the plugin cache database.
+    /// Creates a new <see cref="DetectionCacheDbContext"/> for the fingerprint cache.
     /// </summary>
-    /// <returns>A new <see cref="DetectionCacheDbContext"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when the plugin has not been initialized.</exception>
     public static DetectionCacheDbContext CreateCacheDbContext()
     {
         ArgumentNullException.ThrowIfNull(Instance);
         return new DetectionCacheDbContext(Instance.CacheDbPath);
     }
 
-    /// <inheritdoc />
-    public IEnumerable<PluginPageInfo> GetPages()
-    {
-        return
-        [
-            new PluginPageInfo
-            {
-                Name = Name,
-                EnableInMainMenu = Instance?.Configuration.EnableMainMenu ?? true,
-                EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html"
-            },
-            new PluginPageInfo
-            {
-                Name = "introskipper.js",
-                EmbeddedResourcePath = GetType().Namespace + ".Configuration.introskipper.js"
-            },
-            new PluginPageInfo
-            {
-                Name = "introskipper.css",
-                EmbeddedResourcePath = GetType().Namespace + ".Configuration.introskipper.css"
-            }
-        ];
-    }
+    /// <summary>
+    /// Returns an empty chapter list. Chapter-based detection requires embedded chapter metadata
+    /// extracted from the video file — populate QueuedEpisode.Chapters before analysis to enable it.
+    /// </summary>
+    internal IReadOnlyList<ChapterInfo> GetChapters(Guid id) => [];
 
-    internal BaseItem? GetItem(Guid id) => id != Guid.Empty ? _libraryManager.GetItemById(id) : null;
-
-    internal ICollection<Folder> GetCollectionFolders(Guid id) => GetItem(id) is var item && item is not null ? _libraryManager.GetCollectionFolders(item) : [];
-
-    internal string GetItemPath(Guid id) => GetItem(id) is var item && item is not null ? item.Path : string.Empty;
-
-    internal IReadOnlyList<ChapterInfo> GetChapters(Guid id) => _chapterRepository.GetChapters(id);
+    // ── DB write / read methods ────────────────────────────────────────────────
 
     internal async Task UpdateTimestampAsync(Segment segment, AnalysisMode mode, bool isUserProvided = false, CancellationToken cancellationToken = default)
     {
@@ -255,7 +168,6 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                         .ToListAsync(cancellationToken)
                         .ConfigureAwait(false);
 
-                    // Do not overwrite a user-provided segment with an analysis result.
                     if (!isUserProvided && existingSegments.Any(s => s.IsUserProvided))
                     {
                         return;
@@ -393,17 +305,6 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Removes a single episode ID from the season's analyzed-state list for the given mode.
-    /// The read and write share one <see cref="IntroSkipperDbContext"/> to keep the window for
-    /// concurrent overwrites as small as possible, and the write is skipped entirely when the
-    /// ID is not present in the stored list.
-    /// </summary>
-    /// <param name="seasonId">Season ID.</param>
-    /// <param name="mode">Analysis mode.</param>
-    /// <param name="episodeId">Episode ID to remove.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     internal async Task RemoveEpisodeIdAsync(Guid seasonId, AnalysisMode mode, Guid episodeId, CancellationToken cancellationToken = default)
     {
         using var db = CreateDbContext();
@@ -419,7 +320,7 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         var currentIds = seasonInfo.EpisodeIds.ToList();
         if (!currentIds.Remove(episodeId))
         {
-            return; // Episode was not in the list — no write needed.
+            return;
         }
 
         db.Entry(seasonInfo).Property(s => s.EpisodeIds).CurrentValue = currentIds;
@@ -455,11 +356,9 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 .ConfigureAwait(false));
         }
 
-        var segments = allSegments;
-
         return new SeasonQueueSnapshot(
             seasonInfos.ToDictionary(s => s.Type, s => (IReadOnlySet<Guid>)s.EpisodeIds.ToHashSet()),
-            segments
+            allSegments
                 .GroupBy(s => s.ItemId)
                 .ToDictionary(
                     group => group.Key,
@@ -468,30 +367,12 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                         .ToDictionary(
                             segmentGroup => segmentGroup.Key,
                             segmentGroup => segmentGroup.OrderBy(segment => segment.Start).First().ToSegment())),
-            segments
+            allSegments
                 .Where(s => s.IsUserProvided)
                 .GroupBy(s => s.Type)
                 .ToDictionary(
                     group => group.Key,
                     group => (IReadOnlySet<Guid>)group.Select(s => s.ItemId).ToHashSet()));
-    }
-
-    internal async Task<IReadOnlyDictionary<AnalysisMode, AnalyzerAction>> GetAllAnalyzerActionsAsync(Guid seasonId, CancellationToken cancellationToken = default)
-    {
-        using var db = CreateDbContext();
-        var infos = await db.DbSeasonInfo
-            .Where(s => s.SeasonId == seasonId)
-            .ToDictionaryAsync(s => s.Type, s => s.Action, cancellationToken)
-            .ConfigureAwait(false);
-
-        // Fill in defaults for any missing modes
-        var result = new Dictionary<AnalysisMode, AnalyzerAction>();
-        foreach (var mode in Enum.GetValues<AnalysisMode>())
-        {
-            result[mode] = infos.TryGetValue(mode, out var action) ? action : AnalyzerAction.Default;
-        }
-
-        return result;
     }
 
     internal async Task<AnalyzerAction> GetAnalyzerActionAsync(Guid id, AnalysisMode mode, CancellationToken cancellationToken = default)
@@ -503,6 +384,23 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         return info?.Action ?? AnalyzerAction.Default;
     }
 
+    internal async Task<IReadOnlyDictionary<AnalysisMode, AnalyzerAction>> GetAllAnalyzerActionsAsync(Guid seasonId, CancellationToken cancellationToken = default)
+    {
+        using var db = CreateDbContext();
+        var infos = await db.DbSeasonInfo
+            .Where(s => s.SeasonId == seasonId)
+            .ToDictionaryAsync(s => s.Type, s => s.Action, cancellationToken)
+            .ConfigureAwait(false);
+
+        var result = new Dictionary<AnalysisMode, AnalyzerAction>();
+        foreach (var mode in Enum.GetValues<AnalysisMode>())
+        {
+            result[mode] = infos.TryGetValue(mode, out var action) ? action : AnalyzerAction.Default;
+        }
+
+        return result;
+    }
+
     internal async Task CleanSeasonInfoAsync(IEnumerable<Guid> ids, CancellationToken cancellationToken = default)
     {
         using var db = CreateDbContext();
@@ -512,27 +410,6 @@ public partial class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             .ConfigureAwait(false);
     }
 
-    internal static AnalysisMode MapSegmentTypeToMode(MediaSegmentType type)
-    {
-        return type switch
-        {
-            MediaSegmentType.Intro => AnalysisMode.Introduction,
-            MediaSegmentType.Recap => AnalysisMode.Recap,
-            MediaSegmentType.Preview => AnalysisMode.Preview,
-            MediaSegmentType.Outro => AnalysisMode.Credits,
-            MediaSegmentType.Commercial => AnalysisMode.Commercial,
-            _ => throw new NotImplementedException(),
-        };
-    }
-
-    /// <summary>
-    /// Deletes a stored timestamp (DbSegment) for the specified item and analysis mode.
-    /// </summary>
-    /// <param name="itemId">The item id whose timestamp should be removed.</param>
-    /// <param name="mode">The analysis mode representing the segment type.</param>
-    /// <param name="segment">Optional segment details used to remove a specific entry.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     internal async Task DeleteTimestampAsync(
         Guid itemId,
         AnalysisMode mode,

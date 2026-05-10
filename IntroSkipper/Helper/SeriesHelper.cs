@@ -1,22 +1,16 @@
-// SPDX-FileCopyrightText: 2026 rlauuzo
 // SPDX-License-Identifier: GPL-3.0-only
-
-using Jellyfin.Extensions;
-using MediaBrowser.Controller.Entities.TV;
 
 namespace IntroSkipper.Helper;
 
 /// <summary>
-/// Shared helpers for <see cref="Series"/> metadata queries.
+/// Anime detection helper. In the standalone build, category is set explicitly on each
+/// <see cref="Data.QueuedEpisode"/> via the API request; this stub is retained for compatibility.
 /// </summary>
 internal static class SeriesHelper
 {
     /// <summary>
-    /// Determines whether a series is tagged or categorised as anime.
+    /// Always returns false in the standalone build.
+    /// Set <see cref="Manager.AnalyzeRequest.Category"/> to <c>AnimeEpisode</c> instead.
     /// </summary>
-    /// <param name="series">The series to inspect.</param>
-    /// <returns><c>true</c> when the series has an "anime" tag or genre; otherwise <c>false</c>.</returns>
-    internal static bool IsAnime(Series series) =>
-        series.Tags.Contains("anime", StringComparison.OrdinalIgnoreCase) ||
-        series.Genres.Contains("anime", StringComparison.OrdinalIgnoreCase);
+    internal static bool IsAnime(object? series) => false;
 }
