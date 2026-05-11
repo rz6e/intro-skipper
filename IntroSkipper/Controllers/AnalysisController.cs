@@ -48,11 +48,22 @@ public sealed class AnalysisController : ControllerBase
             return BadRequest("No episodes provided.");
         }
 
+        _analysisService.IncrementPendingBatch();
         _ = Task.Run(
             () => _analysisService.AnalyzeAsync(requests, cancellationToken: cancellationToken),
             cancellationToken);
 
         return Accepted(new { message = "Analysis started", count = requests.Count });
+    }
+
+    /// <summary>
+    /// Returns the current queue status. <c>isAnalyzing</c> is true while a batch is in progress.
+    /// The Python polling script uses this to know when to query for results.
+    /// </summary>
+    [HttpGet("queue/stats")]
+    public IActionResult GetQueueStats()
+    {
+        return Ok(new { isAnalyzing = _analysisService.IsAnalyzing, remaining = _analysisService.IsAnalyzing ? 1 : 0 });
     }
 
     /// <summary>

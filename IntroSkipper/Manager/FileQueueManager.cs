@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.Json;
 using IntroSkipper.Configuration;
 using IntroSkipper.Data;
 using IntroSkipper.Helper;
@@ -30,7 +33,7 @@ public sealed class AnalyzeRequest
     /// <summary>Gets or sets the absolute path to the video file.</summary>
     public string FilePath { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets the episode duration in seconds (0 = auto-detect not yet supported, provide it).</summary>
+    /// <summary>Gets or sets the episode duration in seconds. Pass 0 to auto-detect via ffprobe.</summary>
     public double DurationSeconds { get; set; }
 
     /// <summary>Gets or sets the content category.</summary>
@@ -55,10 +58,13 @@ public sealed class FileQueueManager
     /// <summary>
     /// Converts a flat list of episode requests into the grouped dictionary that
     /// <see cref="ScheduledTasks.BaseItemAnalyzerTask"/> expects (keyed by season Guid).
+    /// When <see cref="AnalyzeRequest.DurationSeconds"/> is zero or negative, duration is
+    /// auto-detected via ffprobe.
     /// </summary>
-    public IReadOnlyDictionary<Guid, List<QueuedEpisode>> BuildQueue(
+    public async Task<IReadOnlyDictionary<Guid, List<QueuedEpisode>>> BuildQueueAsync(
         IEnumerable<AnalyzeRequest> requests,
-        PluginConfiguration config)
+        PluginConfiguration config,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -73,10 +79,22 @@ public sealed class FileQueueManager
                 continue;
             }
 
+            var duration = req.DurationSeconds;
+            if (duration <= 0)
+            {
+                duration = await GetDurationViaFfprobeAsync(req.FilePath, cancellationToken).ConfigureAwait(false);
+                if (duration <= 0)
+                {
+                    _logger.LogWarning("Skipping episode {Name}: could not determine duration via ffprobe", req.EpisodeName);
+                    continue;
+                }
+
+                _logger.LogDebug("Auto-detected duration for {Name}: {Duration:F1}s", req.EpisodeName, duration);
+            }
+
             var seasonId = AniListGuid.ForSeason(req.AniListId, req.SeasonNumber);
             var episodeId = AniListGuid.ForEpisode(req.AniListId, req.SeasonNumber, req.EpisodeNumber);
 
-            var duration = req.DurationSeconds;
             var fingerprintWindow = Math.Min(
                 duration >= 5 * 60 ? duration * analysisPercent : duration,
                 60.0 * config.AnalysisLengthLimit);
@@ -90,7 +108,7 @@ public sealed class FileQueueManager
                 SeriesName = req.SeriesName,
                 SeasonNumber = req.SeasonNumber,
                 EpisodeNumber = req.EpisodeNumber,
-                SeriesId = AniListGuid.ForSeason(req.AniListId, 0), // series-level Guid
+                SeriesId = AniListGuid.ForSeason(req.AniListId, 0),
                 SeasonId = seasonId,
                 EpisodeId = episodeId,
                 Name = req.EpisodeName,
@@ -179,5 +197,50 @@ public sealed class FileQueueManager
         }
 
         return verified;
+    }
+
+    private async Task<double> GetDurationViaFfprobeAsync(string filePath, CancellationToken cancellationToken)
+    {
+        var ffmpegPath = Plugin.Instance?.FFmpegPath ?? "ffmpeg";
+        var dir = Path.GetDirectoryName(ffmpegPath) ?? string.Empty;
+        var ext = Path.GetExtension(ffmpegPath);
+        var ffprobePath = string.IsNullOrEmpty(dir)
+            ? "ffprobe" + ext
+            : Path.Combine(dir, "ffprobe" + ext);
+
+        var info = new ProcessStartInfo(ffprobePath)
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+        };
+        info.ArgumentList.Add("-v");
+        info.ArgumentList.Add("quiet");
+        info.ArgumentList.Add("-print_format");
+        info.ArgumentList.Add("json");
+        info.ArgumentList.Add("-show_format");
+        info.ArgumentList.Add(filePath);
+
+        try
+        {
+            using var proc = new Process { StartInfo = info };
+            proc.Start();
+            var output = await proc.StandardOutput.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            await proc.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(output);
+            if (doc.RootElement.TryGetProperty("format", out var fmt) &&
+                fmt.TryGetProperty("duration", out var dur) &&
+                double.TryParse(dur.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var seconds))
+            {
+                return seconds;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ffprobe failed for {Path}", filePath);
+        }
+
+        return 0;
     }
 }

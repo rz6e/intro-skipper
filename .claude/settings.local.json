@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(ls -l \"c:\\\\Users\\\\krygios\\\\Documents\\\\GitHub\\\\IntroSkipper\\\\intro-skipper\" | Where-Object { !$_.PSIsContainer })",
+      "Bash(dotnet build *)"
+    ]
+  }
+}

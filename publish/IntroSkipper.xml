@@ -1,0 +1,2438 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>IntroSkipper</name>
+    </assembly>
+    <members>
+        <member name="T:IntroSkipper.Analyzers.BlackFrameAltAnalyzer">
+            <summary>
+            Media file analyzer used to detect end credits that consist of text overlaid on a black background.
+            Uses full keyframe scanning with density gating and boundary refinement for robust credit detection.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.BlackFrameAltAnalyzer"/> class.
+            </remarks>
+            <param name="logger">Logger for the analyzer.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.#ctor(Microsoft.Extensions.Logging.ILogger{IntroSkipper.Analyzers.BlackFrameAltAnalyzer})">
+            <summary>
+            Media file analyzer used to detect end credits that consist of text overlaid on a black background.
+            Uses full keyframe scanning with density gating and boundary refinement for robust credit detection.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.BlackFrameAltAnalyzer"/> class.
+            </remarks>
+            <param name="logger">Logger for the analyzer.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.AnalyzeMediaFiles(System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.QueuedEpisode},IntroSkipper.Data.AnalysisMode,System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.DetectCredits(IntroSkipper.Data.QueuedEpisode,System.Int32,System.Int32,System.Int32)">
+            <summary>
+            Detects the start of blackframe credits from FFmpeg blackframe filter output.
+            </summary>
+            <param name="episode">Media file to analyze.</param>
+            <param name="minimumPercentage">Minimum percentage of the frame that must be black.</param>
+            <param name="threshold">Threshold for black frame detection.</param>
+            <param name="minimumDuration">Minimum duration of the credits.</param>
+            <returns>Time range of the detected credits.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.NormalizeThreshold(System.Collections.Generic.List{IntroSkipper.Data.BlackFrame},System.Int32)">
+            <summary>
+            Normalizes black frame detection thresholds based on the video's natural black levels.
+            Uses the 1st-percentile frame as a floor (capped at 30%) and scales the minimum
+            percentage and scene-change threshold accordingly.
+            </summary>
+            <param name="frames">All detected keyframes.</param>
+            <param name="minimumPercentage">Configured minimum black percentage.</param>
+            <returns>Normalized (minimum, sceneChange) thresholds.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.FindBoundaryKeyframeTimes(System.Collections.Generic.List{IntroSkipper.Data.BlackFrame},IntroSkipper.Data.CreditScene)">
+            <summary>
+            Finds the bounding keyframe times for a credit scene transition.
+            Returns the time of the immediately preceding keyframe and the first keyframe at or after the scene start.
+            </summary>
+            <param name="frames">All detected keyframes.</param>
+            <param name="scene">The credit scene to find boundaries for.</param>
+            <returns>Boundary times, or null if no preceding keyframe exists.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.RefineBoundary(IntroSkipper.Data.QueuedEpisode,System.Collections.Generic.List{IntroSkipper.Data.BlackFrame},IntroSkipper.Data.CreditScene,System.Int32,System.Int32,System.Int32)">
+            <summary>
+            Refines the start time of a credit scene by probing the gap between keyframes
+            with full-frame (non-keyframe-only) analysis.
+            </summary>
+            <param name="episode">The episode being analyzed.</param>
+            <param name="frames">All detected keyframes.</param>
+            <param name="scene">The credit scene whose start time to refine.</param>
+            <param name="sceneChange">Normalized transition threshold used to select the scene start.</param>
+            <param name="threshold">Pixel luminance threshold for black detection.</param>
+            <param name="minimumDuration">Minimum duration required for a credits segment.</param>
+            <returns>Refined start time in seconds (relative to CreditsFingerprintStart).</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.SelectProbeMinimum(System.Collections.Generic.List{IntroSkipper.Data.BlackFrame},IntroSkipper.Data.CreditScene,System.Int32)">
+            <summary>
+            Selects the minimum black percentage threshold for boundary probing.
+            </summary>
+            <remarks>
+            Probing should not use a weaker threshold than the final scene start decision.
+            When the scene start was chosen by the stronger transition threshold, probing is capped at that value.
+            Otherwise, probing uses the selected start frame's measured black level.
+            </remarks>
+            <param name="frames">All detected keyframes.</param>
+            <param name="scene">The credit scene whose start boundary is being refined.</param>
+            <param name="sceneChange">Normalized transition threshold used to select the scene start.</param>
+            <returns>The minimum black percentage to use for full-frame probing.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.ShouldRefineBoundary(IntroSkipper.Data.CreditScene,System.Double,System.Int32)">
+            <summary>
+            Determines whether boundary refinement is likely to materially change the result.
+            </summary>
+            <param name="scene">The credit scene whose start boundary is being refined.</param>
+            <param name="lastKeyframeTime">Time of the preceding keyframe.</param>
+            <param name="minimumDuration">Minimum duration required for a credits segment.</param>
+            <returns>
+            <see langword="true"/> when the preceding keyframe gap is large enough to matter and the
+            additional time could affect segment validity; otherwise, <see langword="false"/>.
+            </returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.ConvertProbeTimestamp(System.Double,System.Double)">
+            <summary>
+            Converts an FFmpeg probe timestamp (relative to the seek point) back to
+            CreditsFingerprintStart-relative time.
+            </summary>
+            <remarks>
+            The range-based FFmpeg overload uses -ss before -i (input seeking),
+            so output timestamps are relative to the seek point (lastKeyframeTime + CreditsFingerprintStart).
+            Converting back:
+              absoluteTime = probeTime + lastKeyframeTime + CreditsFingerprintStart,
+              relativeTime = absoluteTime - CreditsFingerprintStart
+                           = probeTime + lastKeyframeTime.
+            </remarks>
+            <param name="probeTime">Timestamp from FFmpeg probe output (relative to seek point).</param>
+            <param name="lastKeyframeTime">Time of the preceding keyframe (relative to CreditsFingerprintStart).</param>
+            <returns>Refined start time in seconds (relative to CreditsFingerprintStart).</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.TryRefineBoundaryTime(System.Double,System.Double,System.Double)">
+            <summary>
+            Validates a probe timestamp for boundary refinement and converts it to scene-relative time.
+            </summary>
+            <param name="probeTime">Timestamp from FFmpeg probe output (relative to seek point).</param>
+            <param name="lastKeyframeTime">Time of the preceding keyframe.</param>
+            <param name="sceneStartTime">Current scene start chosen by keyframe analysis.</param>
+            <returns>
+            The refined start time when the probe lands strictly after the preceding keyframe and no later than
+            the current scene start; otherwise <see langword="null"/>.
+            </returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAltAnalyzer.HasMinimumBlackFrameDensity(System.Collections.Generic.List{IntroSkipper.Data.BlackFrame},IntroSkipper.Data.CreditScene,System.Int32,System.Int32@)">
+             <summary>
+             Checks whether a scene meets the minimum black-frame density threshold.
+             </summary>
+             <remarks>
+             <paramref name="searchStart"/> is an optimization index passed by reference. It tracks the
+             first frame index that falls within (or after) the most recently checked scene. Because both
+             frames and scenes are time-sorted, later scenes can skip frames that precede them.
+            
+             <para><b>Invariant:</b> <paramref name="searchStart"/> only advances forward. Each call sets it
+             to the index of the first frame at or after <c>scene.StartTime</c>, so the next call with a
+             later scene starts scanning from there instead of from 0.</para>
+            
+             <para><b>Exception:</b> Callers checking a <em>merged</em> span (which may start earlier than the
+             previous individual scene) must pass a fresh <c>searchStart = 0</c> to avoid skipping frames
+             that fall within the merged range.</para>
+             </remarks>
+        </member>
+        <member name="T:IntroSkipper.Analyzers.BlackFrameAnalyzer">
+            <summary>
+            Media file analyzer used to detect end credits that consist of text overlaid on a black background.
+            Uses an adaptive binary search algorithm to efficiently locate the start of credits.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.BlackFrameAnalyzer"/> class.
+            </remarks>
+            <param name="logger">Logger for the analyzer.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAnalyzer.#ctor(Microsoft.Extensions.Logging.ILogger{IntroSkipper.Analyzers.BlackFrameAnalyzer})">
+            <summary>
+            Media file analyzer used to detect end credits that consist of text overlaid on a black background.
+            Uses an adaptive binary search algorithm to efficiently locate the start of credits.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.BlackFrameAnalyzer"/> class.
+            </remarks>
+            <param name="logger">Logger for the analyzer.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAnalyzer.AnalyzeMediaFiles(System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.QueuedEpisode},IntroSkipper.Data.AnalysisMode,System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAnalyzer.AnalyzeMediaFile(IntroSkipper.Data.QueuedEpisode,System.Double,System.Int32,System.Int32)">
+            <summary>
+            Analyzes an individual media file to find the start of credits.
+            </summary>
+            <param name="episode">Media file to analyze.</param>
+            <param name="initialStart">Initial search position from the end of the file.</param>
+            <param name="minimumBlackPercentage">Minimum percentage of the frame that must be black.</param>
+            <param name="threshold">Threshold for black frame detection.</param>
+            <returns>Credits segment if found; otherwise null.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAnalyzer.TryAnalyzeChapters(IntroSkipper.Data.QueuedEpisode,System.Int32,System.Int32,IntroSkipper.Data.Segment@)">
+            <summary>
+            Attempts to find credits by analyzing chapter markers.
+            </summary>
+            <param name="episode">Episode to analyze.</param>
+            <param name="percentage">Minimum percentage of the frame that must be black.</param>
+            <param name="threshold">Threshold for black frame detection.</param>
+            <param name="segment">Output segment if credits are found.</param>
+            <returns>True if credits were found using chapters; otherwise false.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.BlackFrameAnalyzer.FindSearchStart(IntroSkipper.Data.QueuedEpisode,System.Int32,System.Int32)">
+            <summary>
+            Finds an optimal starting point for the credits search to avoid false positives.
+            </summary>
+            <param name="episode">Episode to analyze.</param>
+            <param name="percentage">Minimum percentage of the frame that must be black.</param>
+            <param name="threshold">Threshold for black frame detection.</param>
+            <returns>Search start position in seconds from the end of the file.</returns>
+        </member>
+        <member name="T:IntroSkipper.Analyzers.ChapterAnalyzer">
+            <summary>
+            Chapter name analyzer.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.ChapterAnalyzer"/> class.
+            </remarks>
+            <param name="logger">Logger.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChapterAnalyzer.#ctor(Microsoft.Extensions.Logging.ILogger{IntroSkipper.Analyzers.ChapterAnalyzer})">
+            <summary>
+            Chapter name analyzer.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.ChapterAnalyzer"/> class.
+            </remarks>
+            <param name="logger">Logger.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChapterAnalyzer.AnalyzeMediaFiles(System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.QueuedEpisode},IntroSkipper.Data.AnalysisMode,System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChapterAnalyzer.FindMatchingChapter(IntroSkipper.Data.QueuedEpisode,System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.ChapterInfo},System.String,IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Searches a list of chapter names for one that matches the provided regular expression.
+            Only public to allow for unit testing.
+            </summary>
+            <param name="episode">Episode.</param>
+            <param name="chapters">Media item chapters.</param>
+            <param name="expression">Regular expression pattern.</param>
+            <param name="mode">Analysis mode.</param>
+            <returns>Intro object containing skippable time range, or null if no chapter matched.</returns>
+        </member>
+        <member name="T:IntroSkipper.Analyzers.ChromaprintAnalyzer">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.ChromaprintAnalyzer"/> class.
+            </summary>
+            <param name="logger">Logger.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.#ctor(Microsoft.Extensions.Logging.ILogger{IntroSkipper.Analyzers.ChromaprintAnalyzer})">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Analyzers.ChromaprintAnalyzer"/> class.
+            </summary>
+            <param name="logger">Logger.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.AnalyzeMediaFiles(System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.QueuedEpisode},IntroSkipper.Data.AnalysisMode,System.Threading.CancellationToken)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.CompareEpisodes(System.Guid,System.UInt32[],System.Guid,System.UInt32[])">
+            <summary>
+            Analyze two episodes to find an introduction sequence shared between them.
+            </summary>
+            <param name="lhsId">First episode id.</param>
+            <param name="lhsPoints">First episode fingerprint points.</param>
+            <param name="rhsId">Second episode id.</param>
+            <param name="rhsPoints">Second episode fingerprint points.</param>
+            <returns>Intros for the first and second episodes.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.GetLongestTimeRange(System.Guid,System.Collections.Generic.List{IntroSkipper.Data.TimeRange},System.Guid,System.Collections.Generic.List{IntroSkipper.Data.TimeRange})">
+            <summary>
+            Locates the longest range of similar audio and returns an Intro class for each range.
+            </summary>
+            <param name="lhsId">First episode id.</param>
+            <param name="lhsRanges">First episode shared timecodes.</param>
+            <param name="rhsId">Second episode id.</param>
+            <param name="rhsRanges">Second episode shared timecodes.</param>
+            <returns>Intros for the first and second episodes.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.SearchInvertedIndex(System.Guid,System.UInt32[],System.Guid,System.UInt32[])">
+            <summary>
+            Search for a shared introduction sequence using inverted indexes.
+            </summary>
+            <param name="lhsId">LHS ID.</param>
+            <param name="lhsPoints">Left episode fingerprint points.</param>
+            <param name="rhsId">RHS ID.</param>
+            <param name="rhsPoints">Right episode fingerprint points.</param>
+            <returns>List of shared TimeRanges between the left and right episodes.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.FindContiguous(System.UInt32[],System.UInt32[],System.Int32)">
+            <summary>
+            Finds the longest contiguous region of similar audio between two fingerprints using the provided shift amount.
+            </summary>
+            <param name="lhs">First fingerprint to compare.</param>
+            <param name="rhs">Second fingerprint to compare.</param>
+            <param name="shiftAmount">Amount to shift one fingerprint by.</param>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.CreateInvertedIndex(System.Guid,System.UInt32[])">
+            <summary>
+            Transforms a Chromaprint into an inverted index of fingerprint points to the last index it appeared at.
+            </summary>
+            <param name="id">Episode ID.</param>
+            <param name="fingerprint">Chromaprint fingerprint.</param>
+            <returns>Inverted index.</returns>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.ChromaprintAnalyzer.CountBits(System.UInt32)">
+            <summary>
+            Count the number of bits that are set in the provided number.
+            </summary>
+            <param name="number">Number to count bits in.</param>
+            <returns>Number of bits that are equal to 1.</returns>
+        </member>
+        <member name="T:IntroSkipper.Analyzers.IMediaFileAnalyzer">
+            <summary>
+            Media file analyzer interface.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.IMediaFileAnalyzer.AnalyzeMediaFiles(System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.QueuedEpisode},IntroSkipper.Data.AnalysisMode,System.Threading.CancellationToken)">
+            <summary>
+            Analyze media files for shared introductions or credits, returning all media files that were **not successfully analyzed**.
+            </summary>
+            <param name="analysisQueue">Collection of unanalyzed media files.</param>
+            <param name="mode">Analysis mode.</param>
+            <param name="cancellationToken">Cancellation token from scheduled task.</param>
+            <returns>Collection of media files that were **unsuccessfully analyzed**.</returns>
+        </member>
+        <member name="T:IntroSkipper.Analyzers.TimeAdjustmentHelper">
+            <summary>
+            Helper class for adjusting intro times.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.TimeAdjustmentHelper.#ctor(Microsoft.Extensions.Logging.ILogger,IntroSkipper.Configuration.PluginConfiguration,IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Helper class for adjusting intro times.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.TimeAdjustmentHelper.AdjustIntroTimes(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.Segment,System.Nullable{System.Boolean})">
+            <summary>
+            Adjusts the intro times of an episode and returns a new Segment with the adjusted times.
+            </summary>
+            <param name="episode">The episode to adjust.</param>
+            <param name="originalIntro">The original intro segment.</param>
+            <param name="adjustIntroBasedOnChapters">Whether to adjust based on chapters (overrides _config if true).</param>
+            <returns>A new Segment with adjusted intro times.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown if episode or originalIntro is null.</exception>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.TimeAdjustmentHelper.GetChapterBoundary(System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.ChapterInfo},System.Double,IntroSkipper.Data.TimeRange)">
+            <summary>
+            Finds the chapter boundary (start time in seconds) within the given search range.
+            Returns currentEnd if no chapter is found.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.TimeAdjustmentHelper.AdjustIntroEndBasedOnSilence(IntroSkipper.Data.QueuedEpisode,System.Double,IntroSkipper.Data.TimeRange,System.Double)">
+            <summary>
+            Adjusts the intro end based on detected silence within the search range.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.TimeAdjustmentHelper.SnapToNearestKeyframe(IntroSkipper.Data.QueuedEpisode,System.Double,IntroSkipper.Data.TimeRange)">
+            <summary>
+            Snaps a timestamp to the nearest keyframe within the search range.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.TimeAdjustmentHelper.SelectNearest(System.Collections.Generic.IEnumerable{System.Double},System.Double)">
+            <summary>
+            Selects the value in candidates nearest to the reference; returns reference if no candidates.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Analyzers.TimeAdjustmentHelper.GetSearchRange(System.Double,System.Double,System.Double,System.Double)">
+            <summary>
+            Gets a search range around a given time.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Configuration.PluginConfiguration">
+            <summary>
+            Plugin configuration.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Configuration.PluginConfiguration.DefaultAnalysisPercent">
+            <summary>
+            Default percentage of each episode's audio track to analyze.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Configuration.PluginConfiguration.DefaultAnalysisLengthLimit">
+            <summary>
+            Default upper limit (in minutes) on the length of each episode's audio track that will be analyzed.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Configuration.PluginConfiguration.DefaultMinimumIntroDuration">
+            <summary>
+            Default minimum length of similar audio that will be considered an introduction.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Configuration.PluginConfiguration.MinimumAnalysisPercent">
+            <summary>
+            Minimum percentage of each episode's audio track to analyze.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Configuration.PluginConfiguration.MaximumAnalysisPercent">
+            <summary>
+            Maximum percentage of each episode's audio track to analyze.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Configuration.PluginConfiguration.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Configuration.PluginConfiguration"/> class.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ExcludeSeries">
+            <summary>
+            Gets or sets the comma separated list of series names to exclude from analysis.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AutoDetectIntros">
+            <summary>
+            Gets or sets a value indicating whether to automatically scan newly added items.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AnalyzeSeasonZero">
+            <summary>
+            Gets or sets a value indicating whether to analyze season 0.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.PreferChromaprint">
+            <summary>
+            Gets or sets a value indicating whether to only use chromaprint.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.CacheFingerprints">
+            <summary>
+            Gets or sets a value indicating whether the episode's fingerprint should be cached to the filesystem.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.CacheCompressionLevel">
+            <summary>
+            Gets or sets the Brotli compression level used for the detection cache.
+            Higher compression reduces disk usage but increases CPU time during analysis.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.UseAlternativeBlackFrameAnalyzer">
+            <summary>
+            Gets or sets a value indicating whether to use the alternative black frame analyzer.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.RefineCreditsBoundary">
+            <summary>
+            Gets or sets a value indicating whether to refine credits boundaries with frame-level analysis.
+            When enabled, the alternative black frame analyzer probes the gap between keyframes
+            to find the exact frame where credits begin. Disable for faster analysis with keyframe-only accuracy.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.UpdateMediaSegments">
+            <summary>
+            Gets or sets a value indicating whether to update Media Segments.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ScanIntroduction">
+            <summary>
+            Gets or sets a value indicating whether Introductions should be analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ScanCredits">
+            <summary>
+            Gets or sets a value indicating whether Credits should be analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ScanRecap">
+            <summary>
+            Gets or sets a value indicating whether Recaps should be analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ScanPreview">
+            <summary>
+            Gets or sets a value indicating whether Previews should be analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ScanCommercial">
+            <summary>
+            Gets or sets a value indicating whether Commercials should be analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AnalysisPercent">
+            <summary>
+            Gets or sets the percentage of each episode's audio track to analyze.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AnalysisLengthLimit">
+            <summary>
+            Gets or sets the upper limit (in minutes) on the length of each episode's audio track that will be analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.FullLengthChapters">
+            <summary>
+            Gets or sets a value indicating whether to use the minimum and maximum duration for chapters.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.SkipFirstEpisode">
+            <summary>
+            Gets or sets a value indicating whether the introduction in the first episode of a season should be ignored.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.SkipFirstEpisodeAnime">
+            <summary>
+            Gets or sets a value indicating whether skipping first episode should only apply to anime.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AnimePreviewFromCreditsEnd">
+            <summary>
+            Gets or sets a value indicating whether the remaining content after the credits should be set as a preview for anime episodes.
+            When enabled, a Preview segment covering the time from the end of the credits to the end of the episode is created for anime.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MinimumIntroDuration">
+            <summary>
+            Gets or sets the minimum length of similar audio that will be considered an introduction.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumIntroDuration">
+            <summary>
+            Gets or sets the maximum length of similar audio that will be considered an introduction.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MinimumCreditsDuration">
+            <summary>
+            Gets or sets the minimum length of similar audio that will be considered ending credits.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumCreditsDuration">
+            <summary>
+            Gets or sets the upper limit (in seconds) on the length of each episode's audio track that will be analyzed when searching for ending credits.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumMovieCreditsDuration">
+            <summary>
+            Gets or sets the upper limit (in seconds) on the length of a movie segment that will be analyzed when searching for ending credits.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MinimumRecapDuration">
+            <summary>
+            Gets or sets the minimum length of similar audio that will be considered a recap.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumRecapDuration">
+            <summary>
+            Gets or sets the maximum length of similar audio that will be considered a recap.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MinimumPreviewDuration">
+            <summary>
+            Gets or sets the minimum length of similar audio that will be considered a preview.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumPreviewDuration">
+            <summary>
+            Gets or sets the maximum length of similar audio that will be considered a preview.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MinimumCommercialDuration">
+            <summary>
+            Gets or sets the minimum length of similar audio that will be considered a commercial.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumCommercialDuration">
+            <summary>
+            Gets or sets the maximum length of similar audio that will be considered a commercial.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.BlackFrameMinimumPercentage">
+            <summary>
+            Gets or sets the minimum percentage of a frame that must consist of black pixels before it is considered a black frame.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.BlackFrameThreshold">
+            <summary>
+            Gets or sets the threshold for black frame detection.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.UseChapterMarkersBlackFrame">
+            <summary>
+            Gets or sets a value indicating whether to use chapter markers for credits detection.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AdjustIntroBasedOnChapters">
+            <summary>
+            Gets or sets a value indicating whether to adjust segment based on chapter marks.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AdjustIntroBasedOnSilence">
+            <summary>
+            Gets or sets a value indicating whether to adjust the end of a segment based on silence.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.SnapToKeyframe">
+            <summary>
+            Gets or sets a value indicating whether to snap the end of a segment to the nearest keyframe.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.EndSnapThreshold">
+            <summary>
+            Gets or sets window in seconds to snap segments to the end of the episode.
+            This gets applied at the very end.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AdjustWindowInward">
+            <summary>
+            Gets or sets the number of seconds to search toward the interior of a segment
+            when looking for adjustment points (like chapter boundaries, silence, or keyframes).
+            Used to narrow or tighten segment boundaries.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.AdjustWindowOutward">
+            <summary>
+            Gets or sets the number of seconds to search away from a segment
+            when looking for adjustment points (like chapter boundaries, silence, or keyframes).
+            Used to expand or widen segment boundaries.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ChapterAnalyzerIntroductionPattern">
+            <summary>
+            Gets or sets the regular expression used to detect introduction chapters.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ChapterAnalyzerEndCreditsPattern">
+            <summary>
+            Gets or sets the regular expression used to detect ending credit chapters.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ChapterAnalyzerPreviewPattern">
+            <summary>
+            Gets or sets the regular expression used to detect Preview chapters.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ChapterAnalyzerRecapPattern">
+            <summary>
+            Gets or sets the regular expression used to detect Recap chapters.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ChapterAnalyzerCommercialPattern">
+            <summary>
+            Gets or sets the regular expression used to detect Commercial chapters.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.IntroEndOffset">
+            <summary>
+            Gets or sets the amount of intro to play (in seconds).
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.IntroStartOffset">
+            <summary>
+            Gets or sets the amount of intro at start to play (in seconds).
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumFingerprintPointDifferences">
+            <summary>
+            Gets or sets the maximum number of bits (out of 32 total) that can be different between two Chromaprint points before they are considered dissimilar.
+            Defaults to 6 (81% similar).
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaximumTimeSkip">
+            <summary>
+            Gets or sets the maximum number of seconds that can pass between two similar fingerprint points before a new time range is started.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.InvertedIndexShift">
+            <summary>
+            Gets or sets the amount to shift inverted indexes by.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.SilenceDetectionMaximumNoise">
+            <summary>
+            Gets or sets the maximum amount of noise (in dB) that is considered silent.
+            Lowering this number will increase the filter's sensitivity to noise.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.SilenceDetectionMinimumDuration">
+            <summary>
+            Gets or sets the minimum duration of audio (in seconds) that is considered silent.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.MaxParallelism">
+            <summary>
+            Gets or sets the max degree of parallelism used when analyzing episodes.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ProcessThreads">
+            <summary>
+            Gets or sets the number of threads for a ffmpeg process.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.ProcessPriority">
+            <summary>
+            Gets or sets the relative priority for a ffmpeg process.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.UseFileTransformationPlugin">
+            <summary>
+            Gets or sets a value indicating whether to use the File Transformation plugin if available.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.SkipbuttonHideDelay">
+            <summary>
+            Gets or sets the amount of seconds to wait before hiding the skip button.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.EnableMainMenu">
+            <summary>
+            Gets or sets a value indicating whether to enable the main menu entry for the plugin.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Configuration.PluginConfiguration.FileTransformationPluginEnabled">
+            <summary>
+            Gets or sets a value indicating whether the File Transformation plugin is enabled.
+            Set at runtime; not serialised to disk.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Controllers.AnalysisController">
+            <summary>
+            REST API for submitting episodes and retrieving skip timestamps.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Controllers.AnalysisController.#ctor(IntroSkipper.Services.AnalysisService)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Controllers.AnalysisController"/> class.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Controllers.AnalysisController.Analyze(System.Collections.Generic.IReadOnlyList{IntroSkipper.Manager.AnalyzeRequest},System.Threading.CancellationToken)">
+            <summary>
+            Submits one or more episodes for analysis. Returns immediately; analysis runs in the background.
+            Poll <c>GET /api/skips/{aniListId}/{episodeNumber}</c> to check for results.
+            </summary>
+            <remarks>
+            Example body:
+            <code>
+            [
+              { "aniListId": 21, "seasonNumber": 1, "episodeNumber": 1,
+                "seriesName": "One Piece", "episodeName": "I'm Luffy!",
+                "filePath": "/media/one-piece/S01E01.mkv", "durationSeconds": 1440,
+                "category": "AnimeEpisode" }
+            ]
+            </code>
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.Controllers.AnalysisController.GetSkips(System.Int32,System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Returns stored skip timestamps for a single episode.
+            Returns 404 if analysis has not yet produced results.
+            </summary>
+            <param name="aniListId">AniList series ID.</param>
+            <param name="episodeNumber">Episode number within the season.</param>
+            <param name="season">Season number (default 1).</param>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:IntroSkipper.Controllers.AnalysisController.GetAllSkips(System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Returns all stored skip timestamps for every analyzed episode of an AniList series/season.
+            </summary>
+            <param name="aniListId">AniList series ID.</param>
+            <param name="season">Season number (default 1).</param>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="T:IntroSkipper.Data.AnalysisMode">
+            <summary>
+            Type of media file analysis to perform.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalysisMode.Introduction">
+            <summary>
+            Detect introduction sequences.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalysisMode.Credits">
+            <summary>
+            Detect credits.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalysisMode.Preview">
+            <summary>
+            Detect previews.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalysisMode.Recap">
+            <summary>
+            Detect recaps.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalysisMode.Commercial">
+            <summary>
+            Detect commercials. Only for Segment editor.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.AnalyzerAction">
+            <summary>
+            Type of media file analysis to perform.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalyzerAction.Default">
+            <summary>
+            Default action.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalyzerAction.Chapter">
+            <summary>
+            Detect chapters.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalyzerAction.Chromaprint">
+            <summary>
+            Detect chromaprint fingerprints.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalyzerAction.BlackFrame">
+            <summary>
+            Detect black frames.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.AnalyzerAction.None">
+            <summary>
+            No action.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.BlackFrame">
+            <summary>
+            A frame of video that partially (or entirely) consists of black pixels.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.BlackFrame"/> class.
+            </remarks>
+            <param name="Percentage">Percentage of the frame that is black.</param>
+            <param name="Time">Time this frame appears at.</param>
+            <param name="Frame">Frame number.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.BlackFrame.#ctor(System.Int32,System.Double,System.Int32)">
+            <summary>
+            A frame of video that partially (or entirely) consists of black pixels.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.BlackFrame"/> class.
+            </remarks>
+            <param name="Percentage">Percentage of the frame that is black.</param>
+            <param name="Time">Time this frame appears at.</param>
+            <param name="Frame">Frame number.</param>
+        </member>
+        <member name="P:IntroSkipper.Data.BlackFrame.Percentage">
+            <summary>Percentage of the frame that is black.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.BlackFrame.Time">
+            <summary>Time this frame appears at.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.BlackFrame.Frame">
+            <summary>Frame number.</summary>
+        </member>
+        <member name="T:IntroSkipper.Data.CacheEntryType">
+            <summary>
+            Type of detection data stored in a cache entry.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.CacheEntryType.Chromaprint">
+            <summary>
+            Audio fingerprint data (Chromaprint).
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.CacheEntryType.Silence">
+            <summary>
+            Silence detection results.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.CacheEntryType.BlackFrame">
+            <summary>
+            Black frame detection results.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.CacheEntryType.Keyframe">
+            <summary>
+            Key frame timestamp data.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.ChapterInfo">
+            <summary>
+            Lightweight chapter descriptor, equivalent to Jellyfin's ChapterInfo but without the Jellyfin dependency.
+            Times are stored as 100-nanosecond ticks (matching TimeSpan.Ticks) so ChapterAnalyzer math is unchanged.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.ChapterInfo.Name">
+            <summary>Gets or sets the display name of the chapter.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.ChapterInfo.StartPositionTicks">
+            <summary>Gets or sets the chapter start time in ticks (100 ns each).</summary>
+        </member>
+        <member name="T:IntroSkipper.Data.ChromaprintConstants">
+            <summary>
+            Shared constants for chromaprint fingerprint timing calculations.
+            </summary>
+            <remarks>
+            Chromaprint parameters (sample rate 11025 Hz, frame size 4096, 2/3 overlap)
+            define the relationship between fingerprint point count and audio duration.
+            See: <see href="https://oxygene.sk/2011/01/how-does-chromaprint-work/"/>.
+            </remarks>
+        </member>
+        <member name="F:IntroSkipper.Data.ChromaprintConstants.SampleDuration">
+            <summary>
+            Duration in seconds of one fingerprint point (hop duration).
+            Computed as <c>4096 / (11025 * 3)</c> ≈ 0.12383 seconds.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.ChromaprintConstants.HashWindowDuration">
+            <summary>
+            Duration in seconds of the analysis window that extends beyond the last hop.
+            Each 32-bit hash covers approximately 2.6 seconds of audio (~21 chroma frames).
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.ChromaprintConstants.DurationTolerance">
+            <summary>
+            Maximum acceptable difference in seconds between inferred and expected fingerprint duration
+            during legacy cache migration crosscheck.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.ChromaprintConstants.InferDuration(System.Int32)">
+            <summary>
+            Infers the audio duration (in whole seconds) from a fingerprint point count.
+            </summary>
+            <param name="lineCount">Number of fingerprint points (uint values).</param>
+            <returns>Estimated duration in seconds, rounded to the nearest whole second.</returns>
+        </member>
+        <member name="T:IntroSkipper.Data.CreditScene">
+            <summary>
+            A scene of black frames.
+            </summary>
+            <param name="StartFrame">The frame number of the first black frame.</param>
+            <param name="EndFrame">The frame number of the last black frame.</param>
+            <param name="StartTime">The time of the first black frame.</param>
+            <param name="EndTime">The time of the last black frame.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.CreditScene.#ctor(System.Int32,System.Int32,System.Double,System.Double)">
+            <summary>
+            A scene of black frames.
+            </summary>
+            <param name="StartFrame">The frame number of the first black frame.</param>
+            <param name="EndFrame">The frame number of the last black frame.</param>
+            <param name="StartTime">The time of the first black frame.</param>
+            <param name="EndTime">The time of the last black frame.</param>
+        </member>
+        <member name="P:IntroSkipper.Data.CreditScene.StartFrame">
+            <summary>The frame number of the first black frame.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.CreditScene.EndFrame">
+            <summary>The frame number of the last black frame.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.CreditScene.StartTime">
+            <summary>The time of the first black frame.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.CreditScene.EndTime">
+            <summary>The time of the last black frame.</summary>
+        </member>
+        <member name="T:IntroSkipper.Data.EpisodeState">
+            <summary>
+            State of an episode.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.EpisodeState.NotAnalyzed">
+            <summary>
+            Episode has not been analyzed.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.EpisodeState.Analyzed">
+            <summary>
+            Episode has been analyzed.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.EpisodeState.NoSegments">
+            <summary>
+            Episode has been analyzed but no segments were found.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.EpisodeState.UserProvided">
+            <summary>
+            Episode segment was provided externally via the segment editor and must not be overwritten by automatic analysis.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.EpisodeVisualization">
+            <summary>
+            Episode name and internal ID as returned by the visualization controller.
+            </summary>
+            <param name="Id">Episode id.</param>
+            <param name="Name">Episode name.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.EpisodeVisualization.#ctor(System.Guid,System.String)">
+            <summary>
+            Episode name and internal ID as returned by the visualization controller.
+            </summary>
+            <param name="Id">Episode id.</param>
+            <param name="Name">Episode name.</param>
+        </member>
+        <member name="P:IntroSkipper.Data.EpisodeVisualization.Id">
+            <summary>Episode id.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.EpisodeVisualization.Name">
+            <summary>Episode name.</summary>
+        </member>
+        <member name="T:IntroSkipper.Data.FingerprintException">
+            <summary>
+            Exception raised when an error is encountered analyzing audio.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.FingerprintException.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.FingerprintException"/> class.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.FingerprintException.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.FingerprintException"/> class.
+            </summary>
+            <param name="message">Exception message.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.FingerprintException.#ctor(System.String,System.Exception)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.FingerprintException"/> class.
+            </summary>
+            <param name="message">Exception message.</param>
+            <param name="inner">Inner exception.</param>
+        </member>
+        <member name="T:IntroSkipper.Data.PluginWarning">
+            <summary>
+            Support bundle warning.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.PluginWarning.None">
+            <summary>
+            No warnings have been added.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.PluginWarning.InvalidChromaprintFingerprint">
+            <summary>
+            At least one media file on the server was unable to be fingerprinted by Chromaprint.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.PluginWarning.IncompatibleFFmpegBuild">
+            <summary>
+            The version of ffmpeg installed on the system is not compatible with the plugin.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.QueuedEpisode">
+            <summary>
+            Episode queued for analysis.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.SeriesName">
+            <summary>
+            Gets or sets the series name.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.SeasonNumber">
+            <summary>
+            Gets or sets the season number.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.EpisodeNumber">
+            <summary>
+            Gets or sets the episode number.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.EpisodeId">
+            <summary>
+            Gets or sets the episode id.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.SeasonId">
+            <summary>
+            Gets or sets the season id.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.SeriesId">
+            <summary>
+            Gets or sets the series id.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.IsAnalyzed">
+            <summary>
+            Gets a value indicating whether this media has been already analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.Path">
+            <summary>
+            Gets or sets the full path to episode.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.Name">
+            <summary>
+            Gets or sets the name of the episode.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.Category">
+            <summary>
+            Gets or sets the category for this media item.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.IsExcluded">
+            <summary>
+            Gets or sets a value indicating whether this media item should be excluded from analysis.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.IntroFingerprintEnd">
+            <summary>
+            Gets or sets the timestamp (in seconds) to stop searching for an introduction at.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.CreditsFingerprintStart">
+            <summary>
+            Gets or sets the timestamp (in seconds) to start looking for end credits at.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.QueuedEpisode.Duration">
+            <summary>
+            Gets or sets the total duration of this media file (in seconds).
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.QueuedEpisode.SetAnalyzed(IntroSkipper.Data.AnalysisMode,IntroSkipper.Data.EpisodeState)">
+            <summary>
+            Sets a value indicating whether this media has been already analyzed.
+            </summary>
+            <param name="mode">Analysis mode.</param>
+            <param name="value">Value to set.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.QueuedEpisode.GetAnalyzed(IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Sets a value indicating whether this media has been already analyzed.
+            </summary>
+            <param name="mode">Analysis mode.</param>
+            <returns>Value of the analyzed mode.</returns>
+        </member>
+        <member name="M:IntroSkipper.Data.QueuedEpisode.NeedsAnalysis(IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Returns <see langword="true"/> when the episode still needs automatic analysis for
+            the given mode — i.e. it is neither already <see cref="F:IntroSkipper.Data.EpisodeState.Analyzed"/>
+            nor protected by a <see cref="F:IntroSkipper.Data.EpisodeState.UserProvided"/> segment.
+            </summary>
+            <param name="mode">Analysis mode.</param>
+            <returns><see langword="true"/> if the episode should be included in the analysis queue.</returns>
+        </member>
+        <member name="T:IntroSkipper.Data.QueuedMediaCategory">
+            <summary>
+            Describes how a media item in the processing queue should be treated.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.QueuedMediaCategory.Episode">
+            <summary>
+            A standard episode that should be analyzed.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.QueuedMediaCategory.AnimeEpisode">
+            <summary>
+            An episode that should be treated with anime-specific rules.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Data.QueuedMediaCategory.Movie">
+            <summary>
+            A movie item.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.ScanStatusResponse">
+            <summary>
+            Represents the current scan status returned by the scan status endpoint.
+            </summary>
+            <param name="IsRunning">Whether a scan is currently in progress.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.ScanStatusResponse.#ctor(System.Boolean)">
+            <summary>
+            Represents the current scan status returned by the scan status endpoint.
+            </summary>
+            <param name="IsRunning">Whether a scan is currently in progress.</param>
+        </member>
+        <member name="P:IntroSkipper.Data.ScanStatusResponse.IsRunning">
+            <summary>Whether a scan is currently in progress.</summary>
+        </member>
+        <member name="T:IntroSkipper.Data.SeasonQueueSnapshot">
+            <summary>
+            Immutable season-scoped snapshot used during queue verification to avoid per-episode database lookups.
+            </summary>
+            <param name="EpisodeIdsByMode">Episode identifiers grouped by analysis mode.</param>
+            <param name="SegmentsByEpisodeId">Existing segments grouped by episode and analysis mode.</param>
+            <param name="UserProvidedByMode">User-provided episode identifiers grouped by analysis mode.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.SeasonQueueSnapshot.#ctor(System.Collections.Generic.IReadOnlyDictionary{IntroSkipper.Data.AnalysisMode,System.Collections.Generic.IReadOnlySet{System.Guid}},System.Collections.Generic.IReadOnlyDictionary{System.Guid,System.Collections.Generic.IReadOnlyDictionary{IntroSkipper.Data.AnalysisMode,IntroSkipper.Data.Segment}},System.Collections.Generic.IReadOnlyDictionary{IntroSkipper.Data.AnalysisMode,System.Collections.Generic.IReadOnlySet{System.Guid}})">
+            <summary>
+            Immutable season-scoped snapshot used during queue verification to avoid per-episode database lookups.
+            </summary>
+            <param name="EpisodeIdsByMode">Episode identifiers grouped by analysis mode.</param>
+            <param name="SegmentsByEpisodeId">Existing segments grouped by episode and analysis mode.</param>
+            <param name="UserProvidedByMode">User-provided episode identifiers grouped by analysis mode.</param>
+        </member>
+        <member name="P:IntroSkipper.Data.SeasonQueueSnapshot.EpisodeIdsByMode">
+            <summary>Episode identifiers grouped by analysis mode.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.SeasonQueueSnapshot.SegmentsByEpisodeId">
+            <summary>Existing segments grouped by episode and analysis mode.</summary>
+        </member>
+        <member name="P:IntroSkipper.Data.SeasonQueueSnapshot.UserProvidedByMode">
+            <summary>User-provided episode identifiers grouped by analysis mode.</summary>
+        </member>
+        <member name="T:IntroSkipper.Data.Segment">
+            <summary>
+            Result of fingerprinting and analyzing two episodes in a season.
+            All times are measured in seconds relative to the beginning of the media file.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.Segment.#ctor(System.Guid,IntroSkipper.Data.TimeRange)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.Segment"/> class.
+            </summary>
+            <param name="episode">Episode.</param>
+            <param name="segment">Introduction time range.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.Segment.#ctor(System.Guid)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.Segment"/> class.
+            </summary>
+            <param name="episode">Episode.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.Segment.#ctor(IntroSkipper.Data.Segment)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.Segment"/> class.
+            </summary>
+            <param name="segment">Segment to copy.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.Segment.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.Segment"/> class.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.Segment.EpisodeId">
+            <summary>
+            Gets or sets the Episode ID.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.Segment.Start">
+            <summary>
+            Gets or sets the introduction sequence start time.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.Segment.End">
+            <summary>
+            Gets or sets the introduction sequence end time.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.Segment.Valid">
+            <summary>
+            Gets a value indicating whether this segment is valid or not.
+            Invalid results must not be returned through the API.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.Segment.Duration">
+            <summary>
+            Gets the duration of this segment.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.TimeRange">
+            <summary>
+            Range of contiguous time.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.TimeRange.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.TimeRange"/> class.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.TimeRange.#ctor(System.Double,System.Double)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.TimeRange"/> class.
+            </summary>
+            <param name="start">Time range start.</param>
+            <param name="end">Time range end.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.TimeRange.#ctor(IntroSkipper.Data.TimeRange)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Data.TimeRange"/> class.
+            </summary>
+            <param name="original">Original TimeRange.</param>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeRange.Start">
+            <summary>
+            Gets or sets the time range start (in seconds).
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeRange.End">
+            <summary>
+            Gets or sets the time range end (in seconds).
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeRange.Duration">
+            <summary>
+            Gets the duration of this time range (in seconds).
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.TimeRange.CompareTo(System.Object)">
+            <summary>
+            Compare TimeRange durations.
+            </summary>
+            <param name="obj">Object to compare with.</param>
+            <returns>int.</returns>
+        </member>
+        <member name="M:IntroSkipper.Data.TimeRange.Intersects(IntroSkipper.Data.TimeRange)">
+            <summary>
+            Tests if this TimeRange object intersects the provided TimeRange.
+            </summary>
+            <param name="tr">Second TimeRange object to test.</param>
+            <returns>true if time range intersects the current TimeRange, false otherwise.</returns>
+        </member>
+        <member name="T:IntroSkipper.Data.TimeRangeHelpers">
+            <summary>
+            Time range helpers.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.TimeRangeHelpers.FindContiguous(System.Double[],System.Double)">
+            <summary>
+            Finds the longest contiguous time range.
+            </summary>
+            <param name="times">Sorted timestamps to search.</param>
+            <param name="maximumDistance">Maximum distance permitted between contiguous timestamps.</param>
+            <returns>The longest contiguous time range (if one was found), or null (if none was found).</returns>
+        </member>
+        <member name="T:IntroSkipper.Data.TimeStamps">
+            <summary>
+            Result of fingerprinting and analyzing two episodes in a season.
+            All times are measured in seconds relative to the beginning of the media file.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeStamps.Introduction">
+            <summary>
+            Gets or sets Introduction.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeStamps.Credits">
+            <summary>
+            Gets or sets Credits.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeStamps.Recap">
+            <summary>
+            Gets or sets Recap.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeStamps.Preview">
+            <summary>
+            Gets or sets Preview.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.TimeStamps.Commercial">
+            <summary>
+            Gets or sets Commercial.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.UpdateAnalyzerActionsRequest">
+            <summary>
+            Update analyzer actions request.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.UpdateAnalyzerActionsRequest.Id">
+            <summary>
+            Gets or sets season ID.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Data.UpdateAnalyzerActionsRequest.AnalyzerActions">
+            <summary>
+            Gets or sets analyzer actions.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Data.WarningManager">
+            <summary>
+            Warning manager.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.WarningManager.SetFlag(IntroSkipper.Data.PluginWarning)">
+            <summary>
+            Set warning.
+            </summary>
+            <param name="warning">Warning.</param>
+        </member>
+        <member name="M:IntroSkipper.Data.WarningManager.Clear">
+            <summary>
+            Clear warnings.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Data.WarningManager.GetWarnings">
+            <summary>
+            Get warnings.
+            </summary>
+            <returns>Warnings.</returns>
+        </member>
+        <member name="T:IntroSkipper.Db.DbDetectionCache">
+            <summary>
+            Represents a cached FFmpeg detection result stored in the detection cache database.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.DbDetectionCache.#ctor(System.Guid,IntroSkipper.Data.AnalysisMode,IntroSkipper.Data.CacheEntryType,System.Byte[],System.Double,System.Double)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbDetectionCache"/> class.
+            </summary>
+            <param name="itemId">The episode identifier.</param>
+            <param name="mode">The analysis mode.</param>
+            <param name="type">The type of detection data.</param>
+            <param name="data">The Brotli-compressed, UTF-8 JSON detection data.</param>
+            <param name="start">The start time of the analyzed range.</param>
+            <param name="end">The end time of the analyzed range.</param>
+        </member>
+        <member name="M:IntroSkipper.Db.DbDetectionCache.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbDetectionCache"/> class.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbDetectionCache.Id">
+            <summary>
+            Gets or sets the unique identifier for the cache entry.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbDetectionCache.ItemId">
+            <summary>
+            Gets the episode identifier.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbDetectionCache.Mode">
+            <summary>
+            Gets the analysis mode (introduction or credits).
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbDetectionCache.Type">
+            <summary>
+            Gets the type of detection data stored in this entry.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbDetectionCache.Start">
+            <summary>
+            Gets the start time of the analyzed range (in seconds).
+            </summary>
+            <value>The range start in seconds. For chromaprint entries, this is the fingerprint start time (0 for introductions).</value>
+        </member>
+        <member name="P:IntroSkipper.Db.DbDetectionCache.End">
+            <summary>
+            Gets the end time of the analyzed range (in seconds).
+            </summary>
+            <value>The range end in seconds. For chromaprint entries, this is the fingerprint end time.</value>
+        </member>
+        <member name="P:IntroSkipper.Db.DbDetectionCache.Data">
+            <summary>
+            Gets or sets the Brotli-compressed, UTF-8 JSON detection data.
+            </summary>
+            <value>The cached data as a compressed BLOB. The decompressed JSON shape depends on <see cref="P:IntroSkipper.Db.DbDetectionCache.Type"/>:
+            <see cref="F:IntroSkipper.Data.CacheEntryType.Chromaprint"/> stores <c>uint[]</c>,
+            <see cref="F:IntroSkipper.Data.CacheEntryType.Silence"/> stores <c>TimeRange[]</c>,
+            <see cref="F:IntroSkipper.Data.CacheEntryType.BlackFrame"/> stores <c>BlackFrame[]</c>,
+            <see cref="F:IntroSkipper.Data.CacheEntryType.Keyframe"/> stores <c>double[]</c>.
+            </value>
+        </member>
+        <member name="T:IntroSkipper.Db.DbSeasonInfo">
+            <summary>
+            All times are measured in seconds relative to the beginning of the media file.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbSeasonInfo"/> class.
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.Db.DbSeasonInfo.#ctor(System.Guid,IntroSkipper.Data.AnalysisMode,IntroSkipper.Data.AnalyzerAction,System.Collections.Generic.IEnumerable{System.Guid})">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbSeasonInfo"/> class.
+            </summary>
+            <param name="seasonId">Season ID.</param>
+            <param name="mode">Analysis mode.</param>
+            <param name="action">Analyzer action.</param>
+            <param name="episodeIds">Episode IDs.</param>
+        </member>
+        <member name="M:IntroSkipper.Db.DbSeasonInfo.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbSeasonInfo"/> class.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSeasonInfo.SeasonId">
+            <summary>
+            Gets the item ID.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSeasonInfo.Type">
+            <summary>
+            Gets the analysis mode.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSeasonInfo.Action">
+            <summary>
+            Gets the analyzer action.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSeasonInfo.EpisodeIds">
+            <summary>
+            Gets the season number.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Db.DbSegment">
+            <summary>
+            All times are measured in seconds relative to the beginning of the media file.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbSegment"/> class.
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.Db.DbSegment.#ctor(IntroSkipper.Data.Segment,IntroSkipper.Data.AnalysisMode,System.Boolean)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbSegment"/> class.
+            </summary>
+            <param name="segment">The segment to initialize the instance with.</param>
+            <param name="type">The type of analysis that was used to determine this segment.</param>
+            <param name="isUserProvided">Whether this segment was provided by the user via the segment editor.</param>
+        </member>
+        <member name="M:IntroSkipper.Db.DbSegment.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DbSegment"/> class.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSegment.Id">
+            <summary>
+            Gets or sets the unique identifier for the segment.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSegment.ItemId">
+            <summary>
+            Gets or sets the episode id.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSegment.Start">
+            <summary>
+            Gets or sets the start time.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSegment.End">
+            <summary>
+            Gets or sets the end time.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSegment.Type">
+            <summary>
+            Gets the type of analysis that was used to determine this segment.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.DbSegment.IsUserProvided">
+            <summary>
+            Gets or sets a value indicating whether this segment was provided by the user via the segment editor,
+            and must not be overwritten by automatic analysis.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.DbSegment.ToSegment">
+            <summary>
+            Converts the instance to a <see cref="T:IntroSkipper.Data.Segment"/> object.
+            </summary>
+            <returns>A <see cref="T:IntroSkipper.Data.Segment"/> object.</returns>
+        </member>
+        <member name="T:IntroSkipper.Db.DetectionCacheDbContext">
+            <summary>
+            EF Core database context for the FFmpeg detection cache.
+            Stored in a separate SQLite file (<c>introskipper-cache.db</c>) so cache corruption
+            does not affect the main segment/season database.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.DetectionCacheDbContext.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DetectionCacheDbContext"/> class.
+            </summary>
+            <param name="dbPath">The path to the SQLite database file.</param>
+        </member>
+        <member name="M:IntroSkipper.Db.DetectionCacheDbContext.#ctor(Microsoft.EntityFrameworkCore.DbContextOptions{IntroSkipper.Db.DetectionCacheDbContext})">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.DetectionCacheDbContext"/> class.
+            </summary>
+            <param name="options">The context options.</param>
+        </member>
+        <member name="P:IntroSkipper.Db.DetectionCacheDbContext.DetectionCache">
+            <summary>
+            Gets or sets the <see cref="T:Microsoft.EntityFrameworkCore.DbSet`1"/> containing the detection cache entries.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.DetectionCacheDbContext.OnConfiguring(Microsoft.EntityFrameworkCore.DbContextOptionsBuilder)">
+            <inheritdoc/>
+        </member>
+        <member name="M:IntroSkipper.Db.DetectionCacheDbContext.OnModelCreating(Microsoft.EntityFrameworkCore.ModelBuilder)">
+            <inheritdoc/>
+        </member>
+        <member name="M:IntroSkipper.Db.DetectionCacheDbContext.EnsureSchema">
+            <summary>
+            Ensures the database and schema are created.
+            Uses <c>EnsureCreated</c> rather than migrations because this is a cache database
+            with no schema evolution requirements — it can safely be deleted and recreated.
+            If the database file already exists but the schema does not match the current model
+            (e.g., left over from a previous format), the database is dropped and recreated.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.DetectionCacheDbContext.HasExpectedSchema">
+            <summary>
+            Checks whether the DetectionCache table has the columns and types expected by the current model.
+            Returns <c>false</c> when the database was created by an older schema version (e.g., binary BLOB format)
+            or when column types or indexes do not match the current model.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Db.IntroSkipperDbContext">
+            <summary>
+            Plugin database.
+            </summary>
+            <remarks>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.IntroSkipperDbContext"/> class.
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContext.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.IntroSkipperDbContext"/> class.
+            </summary>
+            <param name="dbPath">The path to the SQLite database file.</param>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContext.#ctor(Microsoft.EntityFrameworkCore.DbContextOptions{IntroSkipper.Db.IntroSkipperDbContext})">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Db.IntroSkipperDbContext"/> class.
+            </summary>
+            <param name="options">The options.</param>
+        </member>
+        <member name="P:IntroSkipper.Db.IntroSkipperDbContext.DbSegment">
+            <summary>
+            Gets or sets the <see cref="T:Microsoft.EntityFrameworkCore.DbSet`1"/> containing the segments.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Db.IntroSkipperDbContext.DbSeasonInfo">
+            <summary>
+            Gets or sets the <see cref="T:Microsoft.EntityFrameworkCore.DbSet`1"/> containing the season information.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContext.OnConfiguring(Microsoft.EntityFrameworkCore.DbContextOptionsBuilder)">
+            <inheritdoc/>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContext.OnModelCreating(Microsoft.EntityFrameworkCore.ModelBuilder)">
+            <inheritdoc/>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContext.ApplyMigrations">
+            <summary>
+            Applies any pending migrations to the database.
+            Uses synchronous EF Core APIs to avoid sync-over-async deadlock risks.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContext.ApplyMigrationsAsync(System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously applies any pending migrations to the database.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>A <see cref="T:System.Threading.Tasks.Task"/> representing the asynchronous operation.</returns>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContext.RebuildDatabaseAsync(System.Func{IntroSkipper.Db.IntroSkipperDbContext},System.Boolean,System.Threading.CancellationToken)">
+            <summary>
+            Asynchronously rebuilds the database while attempting to preserve valid segments and season information.
+            </summary>
+            <param name="contextFactory">Factory delegate to create sibling <see cref="T:IntroSkipper.Db.IntroSkipperDbContext"/> instances.</param>
+            <param name="forceCleanOnBackupFailure">
+            When <c>true</c>, rebuild proceeds with an empty database if the backup read fails.
+            When <c>false</c>, the rebuild aborts to avoid data loss.
+            </param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>A <see cref="T:System.Threading.Tasks.Task"/> representing the asynchronous operation.</returns>
+        </member>
+        <member name="T:IntroSkipper.Db.IntroSkipperDbContextFactory">
+            <summary>
+            IntroSkipperDbContext factory.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Db.IntroSkipperDbContextFactory.CreateDbContext(System.String[])">
+            <inheritdoc/>
+        </member>
+        <member name="T:IntroSkipper.Db.SqlitePragmaInterceptor">
+            <summary>
+            EF Core connection interceptor that applies SQLite PRAGMAs on every connection open.
+            Shared between <see cref="T:IntroSkipper.Db.IntroSkipperDbContext"/> and <see cref="T:IntroSkipper.Db.DetectionCacheDbContext"/>.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Db.SqlitePragmas">
+            <summary>
+            Shared PRAGMA configuration applied to every SQLite connection on open.
+            Used by <see cref="T:IntroSkipper.Db.IntroSkipperDbContext"/> and <see cref="T:IntroSkipper.Db.DetectionCacheDbContext"/>.
+            WAL journal mode is not set here because EF Core enables it by default.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.FFmpegWrapper">
+            <summary>
+            Wrapper for libchromaprint and the silencedetect filter.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.FFmpegWrapper._silenceDetectionExpression">
+            <summary>
+            Used with FFmpeg's silencedetect filter to extract the start and end times of silence.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.FFmpegWrapper._blackFrameRegex">
+            <summary>
+            Used with FFmpeg's blackframe filter to extract the time and percentage of black pixels.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.FFmpegWrapper.Logger">
+            <summary>
+            Gets or sets the logger.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.CheckFFmpegVersion">
+            <summary>
+            Check that the installed version of ffmpeg supports chromaprint.
+            </summary>
+            <returns>true if a compatible version of ffmpeg is installed, false on any error.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.Fingerprint(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Fingerprint a queued episode.
+            </summary>
+            <param name="episode">Queued episode to fingerprint.</param>
+            <param name="mode">Portion of media file to fingerprint. Introduction = first 25% / 10 minutes and Credits = last 4 minutes.</param>
+            <returns>Numerical fingerprint points.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.DetectSilence(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.TimeRange,IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Detect ranges of silence in the provided episode.
+            </summary>
+            <param name="episode">Queued episode.</param>
+            <param name="range">Time range to search.</param>
+            <param name="mode">Analysis mode, used to correctly key the cache entry.</param>
+            <returns>Array of TimeRange objects that are silent in the queued episode.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.DetectBlackFrames(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.TimeRange,System.Int32,System.Int32,IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Finds the location of all black frames in a media file within a time range.
+            </summary>
+            <param name="episode">Media file to analyze.</param>
+            <param name="range">Time range to search.</param>
+            <param name="minimum">Percentage of the frame that must be black.</param>
+            <param name="threshold">Threshold for black frame detection.</param>
+            <param name="mode">Analysis mode, used to correctly key the cache entry.</param>
+            <returns>Array of frames that are mostly black.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.DetectBlackFrames(IntroSkipper.Data.QueuedEpisode,System.Int32)">
+            <summary>
+            Finds the location of all black frames in a media file starting at a given time.
+            </summary>
+            <param name="episode">Media file to analyze.</param>
+            <param name="threshold">Threshold for black frame detection.</param>
+            <returns>Array of frames that are mostly black.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.DetectKeyFrames(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.TimeRange,IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Detects key frames in a media file within a time range.
+            </summary>
+            <param name="episode">Media file to analyze.</param>
+            <param name="range">Time range to search.</param>
+            <param name="mode">Analysis mode, used to correctly key the cache entry.</param>
+            <returns>Array of timestamps of key frames.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.GetChromaprintLogs">
+            <summary>
+            Gets Chromaprint debugging logs.
+            </summary>
+            <returns>Markdown formatted logs.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.CheckFFmpegRequirement(System.String,System.String,System.String,System.String)">
+            <summary>
+            Run an FFmpeg command with the provided arguments and validate that the output contains
+            the provided string.
+            </summary>
+            <param name="arguments">Arguments to pass to FFmpeg.</param>
+            <param name="mustContain">String that the output must contain. Case-insensitive.</param>
+            <param name="bundleName">Support bundle key to store FFmpeg's output under.</param>
+            <param name="errorMessage">Error message to log if this requirement is not met.</param>
+            <returns>true on success, false on error.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.GetOutput(System.Collections.Generic.IReadOnlyList{System.String},System.Boolean,System.Int32)">
+            <summary>
+            Runs ffmpeg and returns standard output (or error).
+            </summary>
+            <param name="args">Arguments to pass to ffmpeg as individual tokens.</param>
+            <param name="stderr">If standard error should be returned.</param>
+            <param name="timeout">Timeout (in miliseconds) to wait for ffmpeg to exit.</param>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.Fingerprint(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.AnalysisMode,System.Double,System.Double)">
+            <summary>
+            Fingerprint a queued episode.
+            </summary>
+            <param name="episode">Queued episode to fingerprint.</param>
+            <param name="mode">Portion of media file to fingerprint.</param>
+            <param name="start">Time (in seconds) relative to the start of the file to start fingerprinting from.</param>
+            <param name="end">Time (in seconds) relative to the start of the file to stop fingerprinting at.</param>
+            <returns>Numerical fingerprint points.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.LoadCachedFingerprint(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.AnalysisMode,System.Double,System.Double,System.UInt32[]@)">
+            <summary>
+            Tries to load an episode's fingerprint from cache. If caching is not enabled, calling this function is a no-op.
+            Checks the SQLite detection cache first, then migrates legacy on-disk files on the fly.
+            </summary>
+            <param name="episode">Episode to try to load from cache.</param>
+            <param name="mode">Analysis mode.</param>
+            <param name="start">Start time (in seconds) used when the fingerprint was cached.</param>
+            <param name="end">End time (in seconds) used when the fingerprint was cached.</param>
+            <param name="fingerprint">Array to store the fingerprint in.</param>
+            <returns><c>true</c> if the episode was successfully loaded from cache; otherwise <c>false</c>.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.DeleteFingerprintCache(System.Guid)">
+            <summary>
+            Remove a cached episode fingerprint from the database.
+            </summary>
+            <param name="id">Media item ID to remove from cache.</param>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.DeleteCacheFiles(IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Remove cached fingerprints from the database by mode.
+            </summary>
+            <param name="mode">Analysis mode.</param>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.HasCachedFingerprint(IntroSkipper.Data.QueuedEpisode,IntroSkipper.Data.AnalysisMode)">
+            <summary>
+            Returns <c>true</c> if a fingerprint cache entry exists for the episode in the SQLite cache or as a legacy on-disk text file.
+            </summary>
+            <param name="episode">Episode.</param>
+            <param name="mode">Analysis mode.</param>
+            <returns><c>true</c> if any fingerprint cache entry exists; otherwise <c>false</c>.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.MigrateLegacyDetectionCache(System.Collections.Generic.IEnumerable{IntroSkipper.Data.QueuedEpisode},System.Threading.CancellationToken)">
+            <summary>
+            Migrates recognized legacy on-disk detection cache files for queued media items into the SQLite cache.
+            </summary>
+            <param name="episodes">Queued media items whose IDs are still present in enabled libraries.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>The number of legacy cache files migrated.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.SilenceRegex">
+            <remarks>
+            Pattern:<br/>
+            <code>silence_(?&lt;type&gt;start|end): (?&lt;time&gt;[0-9\\.]+)</code><br/>
+            Explanation:<br/>
+            <code>
+            ○ Match the string "silence_".<br/>
+            ○ "type" capture group.<br/>
+                ○ Match with 2 alternative expressions.<br/>
+                    ○ Match the string "start".<br/>
+                    ○ Match the string "end".<br/>
+            ○ Match the string ": ".<br/>
+            ○ "time" capture group.<br/>
+                ○ Match a character in the set [.0-9] atomically at least once.<br/>
+            </code>
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.CompressBrotli``1(``0)">
+            <summary>
+            Serializes and compresses a value using Brotli compression.
+            </summary>
+            <typeparam name="T">The type of the value to serialize.</typeparam>
+            <param name="value">The value to serialize and compress.</param>
+            <returns>The Brotli-compressed data.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.DecompressBrotli``1(System.Byte[])">
+            <summary>
+            Decompresses and deserializes Brotli-compressed data.
+            </summary>
+            <typeparam name="T">The type to deserialize to.</typeparam>
+            <param name="compressed">The Brotli-compressed data.</param>
+            <returns>The deserialized value, or the default if deserialization returns null.</returns>
+        </member>
+        <member name="M:IntroSkipper.FFmpegWrapper.BlackFrameRegex">
+            <remarks>
+            Pattern:<br/>
+            <code>\\[Parsed_blackframe_0 @ [^\\]]+\\] frame:(\\d+) pblack:(\\d+) .*? t:([\\d.]+)</code><br/>
+            Explanation:<br/>
+            <code>
+            ○ Match the string "[Parsed_blackframe_0 @ ".<br/>
+            ○ Match a character other than ']' atomically at least once.<br/>
+            ○ Match the string "] frame:".<br/>
+            ○ 1st capture group.<br/>
+                ○ Match a Unicode digit atomically at least once.<br/>
+            ○ Match the string " pblack:".<br/>
+            ○ 2nd capture group.<br/>
+                ○ Match a Unicode digit atomically at least once.<br/>
+            ○ Match ' '.<br/>
+            ○ Match a character other than '\n' lazily any number of times.<br/>
+            ○ Match the string " t:".<br/>
+            ○ 3rd capture group.<br/>
+                ○ Match a character in the set [.\d] atomically at least once.<br/>
+            </code>
+            </remarks>
+        </member>
+        <member name="T:IntroSkipper.Helper.AniListGuid">
+            <summary>
+            Generates deterministic Guids from AniList IDs so episodes can be keyed
+            the same way as in the original Jellyfin plugin, without requiring Jellyfin.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Helper.AniListGuid.ForEpisode(System.Int32,System.Int32,System.Int32)">
+            <summary>
+            Returns a stable Guid for a specific episode within an AniList entry.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Helper.AniListGuid.ForSeason(System.Int32,System.Int32)">
+            <summary>
+            Returns a stable Guid representing the season (used as the group key during analysis).
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Helper.Commit">
+            <summary>
+            Gets the commit used to build the plugin.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Helper.Commit.CommitHash">
+            <summary>
+            Gets the commit hash used to build the plugin.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Helper.Injector">
+            <summary>
+            A class responsible for injecting a script into the jellyfin web.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Helper.Injector.TimeoutAssignmentPattern">
+            <summary>
+            Pattern to match the timeout assignment in the showSkipButton method.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Helper.Injector.TimeoutOsdChangePattern">
+            <summary>
+            Pattern to match the timeout check in the hideSkipButton method.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Helper.Injector.FocusabilityAssignmentPattern">
+            <summary>
+            Regex to match the focusability check.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Helper.Injector.MillisecondsPerSecond">
+            <summary>
+            Number of milliseconds per second.
+            </summary>
+        </member>
+        <member name="F:IntroSkipper.Helper.Injector.MaxSafeSeconds">
+            <summary>
+            Maximum safe number of seconds that can be converted to milliseconds without overflow.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.TimeoutAssignmentRegex">
+            <remarks>
+            Pattern:<br/>
+            <code>\\(t\\.hideTimeout=setTimeout\\(t\\.hideSkipButton\\.bind\\(t\\)\\,8e3\\)\\)</code><br/>
+            Explanation:<br/>
+            <code>
+            ○ Match the string "(t.hideTimeout=setTimeout(t.hideSkipButton.bind(t),8e3))".<br/>
+            </code>
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.TimeoutOsdChangeRegex">
+            <remarks>
+            Pattern:<br/>
+            <code>\\:this\\.hideTimeout\\|\\|this\\.hideSkipButton\\(\\)</code><br/>
+            Explanation:<br/>
+            <code>
+            ○ Match the string ":this.hideTimeout||this.hideSkipButton()".<br/>
+            </code>
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.FocusabilityAssignmentRegex">
+            <remarks>
+            Pattern:<br/>
+            <code>(?:(?:var)\\s+)?r\\s*=\\s*document\\.activeElement\\s*&amp;&amp;\\s*[A-Za-z_$][\\w$]*\\.A\\.isCurrentlyFocusable\\(document\\.activeElement\\)</code><br/>
+            Options:<br/>
+            <code>RegexOptions.CultureInvariant</code><br/>
+            Explanation:<br/>
+            <code>
+            ○ Optional (greedy).<br/>
+                ○ Match the string "var".<br/>
+                ○ Match a whitespace character atomically at least once.<br/>
+            ○ Match 'r'.<br/>
+            ○ Match a whitespace character atomically any number of times.<br/>
+            ○ Match '='.<br/>
+            ○ Match a whitespace character atomically any number of times.<br/>
+            ○ Match the string "document.activeElement".<br/>
+            ○ Match a whitespace character atomically any number of times.<br/>
+            ○ Match the string "&amp;&amp;".<br/>
+            ○ Match a whitespace character atomically any number of times.<br/>
+            ○ Match a character in the set [$A-Z_a-z].<br/>
+            ○ Match a character in the set [$\w] atomically any number of times.<br/>
+            ○ Match the string ".A.isCurrentlyFocusable(document.activeElement)".<br/>
+            </code>
+            </remarks>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.FileTransformer(IntroSkipper.Helper.PayloadRequest)">
+            <summary>
+            Transforms the file contents by modifying JavaScript timeout values.
+            </summary>
+            <param name="payload">The payload containing the file contents to transform.</param>
+            <returns>The transformed file contents with modified timeout values.</returns>
+            <exception cref="T:System.ArgumentNullException">Thrown when payload is null.</exception>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.ReplaceTimeoutAssignment(System.String,System.String,System.String)">
+            <summary>
+            Makes the skip button persistent by removing the setTimeout call that auto-hides it.
+            </summary>
+            <param name="contents">The JavaScript content to modify.</param>
+            <param name="persist">true if the skip button should be persistent; otherwise, false.</param>
+            <param name="hideDelayMs">The delay in milliseconds before hiding the skip button.</param>
+            <returns>The modified content with persistent skip button behavior.</returns>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.ReplaceTimeoutOsdChange(System.String,System.String)">
+            <summary>
+            Makes the skip button persistent by removing the setTimeout call that auto-hides it.
+            </summary>
+            <param name="contents">The JavaScript content to modify.</param>
+            <param name="persist">true if the skip button should be persistent; otherwise, false.</param>
+            <returns>The modified content.</returns>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.ReplaceFocusabilityCheck(System.String)">
+            <summary>
+            Adds a current time check to the focusability condition.
+            </summary>
+            <param name="contents">The JavaScript content to modify.</param>
+            <returns>The modified content.</returns>
+        </member>
+        <member name="M:IntroSkipper.Helper.Injector.TryGetValidTimeoutMs(System.Int32,System.Int32@)">
+            <summary>
+            Attempts to convert seconds to milliseconds with validation and overflow protection.
+            </summary>
+            <param name="seconds">The number of seconds to convert.</param>
+            <param name="milliseconds">When this method returns, contains the equivalent milliseconds if the conversion succeeded, or 0 if it failed.</param>
+            <returns>true if the conversion succeeded; otherwise, false.</returns>
+        </member>
+        <member name="T:IntroSkipper.Helper.OperatingSystem">
+            <summary>
+            Provides methods to determine the operating system.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Helper.OperatingSystem.IsWindows">
+            <summary>
+            Determines if the current operating system is Windows.
+            </summary>
+            <returns>True if the current operating system is Windows; otherwise, false.</returns>
+        </member>
+        <member name="M:IntroSkipper.Helper.OperatingSystem.IsMacOS">
+            <summary>
+            Determines if the current operating system is macOS.
+            </summary>
+            <returns>True if the current operating system is macOS; otherwise, false.</returns>
+        </member>
+        <member name="M:IntroSkipper.Helper.OperatingSystem.IsLinux">
+            <summary>
+            Determines if the current operating system is Linux.
+            </summary>
+            <returns>True if the current operating system is Linux; otherwise, false.</returns>
+        </member>
+        <member name="M:IntroSkipper.Helper.OperatingSystem.IsDocker">
+            <summary>
+            Determines if the current environment is running in Docker.
+            </summary>
+            <returns>True if running in a Docker container; otherwise, false.</returns>
+        </member>
+        <member name="M:IntroSkipper.Helper.OperatingSystem.DetermineOperatingSystem">
+            <summary>
+            Gets the name of the current operating system.
+            </summary>
+            <returns>The name of the operating system.</returns>
+        </member>
+        <member name="T:IntroSkipper.Helper.PayloadRequest">
+            <summary>
+            Represents the payload for a patch request.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Helper.PayloadRequest.Contents">
+            <summary>
+            Gets or sets represents the contents of the patch request.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Helper.SeriesHelper">
+            <summary>
+            Anime detection helper. In the standalone build, category is set explicitly on each
+            <see cref="T:IntroSkipper.Data.QueuedEpisode"/> via the API request; this stub is retained for compatibility.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Helper.SeriesHelper.IsAnime(System.Object)">
+            <summary>
+            Always returns false in the standalone build.
+            Set <see cref="P:IntroSkipper.Manager.AnalyzeRequest.Category"/> to <c>AnimeEpisode</c> instead.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Manager.AnalyzeRequest">
+            <summary>
+            Describes a single episode to be analyzed.
+            </summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.AniListId">
+            <summary>Gets or sets the AniList series ID.</summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.SeasonNumber">
+            <summary>Gets or sets the season number (1-based; use 1 for single-season shows).</summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.EpisodeNumber">
+            <summary>Gets or sets the episode number within the season.</summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.SeriesName">
+            <summary>Gets or sets the series title (used for logging).</summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.EpisodeName">
+            <summary>Gets or sets the episode title (used for logging).</summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.FilePath">
+            <summary>Gets or sets the absolute path to the video file.</summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.DurationSeconds">
+            <summary>Gets or sets the episode duration in seconds (0 = auto-detect not yet supported, provide it).</summary>
+        </member>
+        <member name="P:IntroSkipper.Manager.AnalyzeRequest.Category">
+            <summary>Gets or sets the content category.</summary>
+        </member>
+        <member name="T:IntroSkipper.Manager.FileQueueManager">
+            <summary>
+            Builds the analysis queue from explicit file paths instead of scanning a Jellyfin library.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Manager.FileQueueManager.#ctor(Microsoft.Extensions.Logging.ILogger{IntroSkipper.Manager.FileQueueManager})">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Manager.FileQueueManager"/> class.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Manager.FileQueueManager.BuildQueue(System.Collections.Generic.IEnumerable{IntroSkipper.Manager.AnalyzeRequest},IntroSkipper.Configuration.PluginConfiguration)">
+            <summary>
+            Converts a flat list of episode requests into the grouped dictionary that
+            <see cref="T:IntroSkipper.ScheduledTasks.BaseItemAnalyzerTask"/> expects (keyed by season Guid).
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Manager.FileQueueManager.VerifyQueueAsync(System.Collections.Generic.IReadOnlyList{IntroSkipper.Data.QueuedEpisode},System.Collections.Generic.IReadOnlyCollection{IntroSkipper.Data.AnalysisMode},System.Threading.CancellationToken)">
+            <summary>
+            Verifies that queued episodes still exist on disk and marks already-analyzed
+            episodes so the analyzer skips them.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Migrations.InitialCreate">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.InitialCreate.Up(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.InitialCreate.Down(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.InitialCreate.BuildTargetModel(Microsoft.EntityFrameworkCore.ModelBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="T:IntroSkipper.Migrations.AddIsUserProvided">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddIsUserProvided.Up(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddIsUserProvided.Down(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddIsUserProvided.BuildTargetModel(Microsoft.EntityFrameworkCore.ModelBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="T:IntroSkipper.Migrations.AddDbSegmentIdentity">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddDbSegmentIdentity.Up(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddDbSegmentIdentity.Down(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddDbSegmentIdentity.BuildTargetModel(Microsoft.EntityFrameworkCore.ModelBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="T:IntroSkipper.Migrations.AddNonCommercialUniqueIndex">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddNonCommercialUniqueIndex.Up(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddNonCommercialUniqueIndex.Down(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="M:IntroSkipper.Migrations.AddNonCommercialUniqueIndex.BuildTargetModel(Microsoft.EntityFrameworkCore.ModelBuilder)">
+            <inheritdoc />
+        </member>
+        <member name="T:IntroSkipper.Plugin">
+            <summary>
+            Standalone intro/credits detection service — Jellyfin dependency removed.
+            Provides database access and configuration for the analysis pipeline.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Plugin.#ctor(System.String,System.String,IntroSkipper.Configuration.PluginConfiguration,Microsoft.Extensions.Logging.ILogger{IntroSkipper.Plugin})">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Plugin"/> class.
+            </summary>
+            <param name="dataDirectory">Directory where databases are stored.</param>
+            <param name="ffmpegPath">Full path to the ffmpeg executable.</param>
+            <param name="configuration">Plugin configuration.</param>
+            <param name="logger">Logger.</param>
+        </member>
+        <member name="P:IntroSkipper.Plugin.Instance">
+            <summary>Gets the plugin singleton.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.Configuration">
+            <summary>Gets or sets the active configuration.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.FFmpegPath">
+            <summary>Gets the full path to the ffmpeg executable.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.FingerprintCachePath">
+            <summary>Gets the directory used to cache fingerprints.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.DbPath">
+            <summary>Gets the path to the segment database.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.CacheDbPath">
+            <summary>Gets the path to the detection cache database.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.AnalyzeAgain">
+            <summary>Gets or sets a value indicating whether to re-analyze already-analyzed episodes.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.QueuedMediaItems">
+            <summary>Gets the most recent media item queue.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.TotalQueued">
+            <summary>Gets or sets the total number of episodes in the queue.</summary>
+        </member>
+        <member name="P:IntroSkipper.Plugin.TotalSeasons">
+            <summary>Gets or sets the number of seasons in the queue.</summary>
+        </member>
+        <member name="M:IntroSkipper.Plugin.CreateDbContext">
+            <summary>
+            Creates a new <see cref="T:IntroSkipper.Db.IntroSkipperDbContext"/> for the segment database.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Plugin.CreateCacheDbContext">
+            <summary>
+            Creates a new <see cref="T:IntroSkipper.Db.DetectionCacheDbContext"/> for the fingerprint cache.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Plugin.GetChapters(System.Guid)">
+            <summary>
+            Returns an empty chapter list. Chapter-based detection requires embedded chapter metadata
+            extracted from the video file — populate QueuedEpisode.Chapters before analysis to enable it.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.ScheduledTasks.BaseItemAnalyzerTask">
+            <summary>
+            Runs the full analysis pipeline over a pre-built episode queue.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.ScheduledTasks.BaseItemAnalyzerTask.#ctor(Microsoft.Extensions.Logging.ILogger,Microsoft.Extensions.Logging.ILoggerFactory,IntroSkipper.Manager.FileQueueManager)">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.ScheduledTasks.BaseItemAnalyzerTask"/> class.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.ScheduledTasks.BaseItemAnalyzerTask.AnalyzeItemsAsync(System.Collections.Generic.IReadOnlyDictionary{System.Guid,System.Collections.Generic.List{IntroSkipper.Data.QueuedEpisode}},System.IProgress{System.Double},System.Threading.CancellationToken,System.Collections.Generic.IReadOnlyCollection{System.Guid})">
+            <summary>
+            Analyzes a pre-built queue of media items.
+            </summary>
+            <param name="queue">Episodes grouped by season Guid (built by <see cref="T:IntroSkipper.Manager.FileQueueManager"/>).</param>
+            <param name="progress">Progress reporter (0-100).</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <param name="seasonsToAnalyze">Optional filter — only analyze these season Guids.</param>
+        </member>
+        <member name="M:IntroSkipper.ScheduledTasks.BaseItemAnalyzerTask.ComputeAnimePreviewFromCredits(System.Guid,System.Double,System.Collections.Generic.IReadOnlyDictionary{IntroSkipper.Data.AnalysisMode,IntroSkipper.Data.Segment})">
+            <summary>
+            Computes the Preview segment derived from the end of credits (used for anime).
+            Public for unit testing.
+            </summary>
+        </member>
+        <member name="T:IntroSkipper.Services.AnalysisService">
+            <summary>
+            Orchestrates fingerprint analysis for a list of episode requests.
+            Call <see cref="M:IntroSkipper.Services.AnalysisService.AnalyzeAsync(System.Collections.Generic.IEnumerable{IntroSkipper.Manager.AnalyzeRequest},System.IProgress{System.Double},System.Threading.CancellationToken)"/> from the REST controller or CLI.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Services.AnalysisService.#ctor(IntroSkipper.Manager.FileQueueManager,Microsoft.Extensions.Logging.ILoggerFactory,Microsoft.Extensions.Logging.ILogger{IntroSkipper.Services.AnalysisService})">
+            <summary>
+            Initializes a new instance of the <see cref="T:IntroSkipper.Services.AnalysisService"/> class.
+            </summary>
+        </member>
+        <member name="M:IntroSkipper.Services.AnalysisService.AnalyzeAsync(System.Collections.Generic.IEnumerable{IntroSkipper.Manager.AnalyzeRequest},System.IProgress{System.Double},System.Threading.CancellationToken)">
+            <summary>
+            Runs the full analysis pipeline over the supplied episode requests.
+            </summary>
+            <param name="requests">Episodes to analyze.</param>
+            <param name="progress">Optional progress reporter (0–100).</param>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:IntroSkipper.Services.AnalysisService.GetTimestampsAsync(System.Int32,System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Retrieves stored skip timestamps for a specific episode, keyed by AniList ID and episode number.
+            </summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.SilenceRegex_0">
+            <summary>Custom <see cref="T:System.Text.RegularExpressions.Regex"/>-derived type for the SilenceRegex method.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.SilenceRegex_0.Instance">
+            <summary>Cached, thread-safe singleton instance.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.SilenceRegex_0.#ctor">
+            <summary>Initializes the instance.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.SilenceRegex_0.RunnerFactory">
+            <summary>Provides a factory for creating <see cref="T:System.Text.RegularExpressions.RegexRunner"/> instances to be used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.SilenceRegex_0.RunnerFactory.CreateInstance">
+            <summary>Creates an instance of a <see cref="T:System.Text.RegularExpressions.RegexRunner"/> used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.SilenceRegex_0.RunnerFactory.Runner">
+            <summary>Provides the runner that contains the custom logic implementing the specified regular expression.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.SilenceRegex_0.RunnerFactory.Runner.Scan(System.ReadOnlySpan{System.Char})">
+            <summary>Scan the <paramref name="inputSpan"/> starting from base.runtextstart for the next match.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.SilenceRegex_0.RunnerFactory.Runner.TryFindNextPossibleStartingPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Search <paramref name="inputSpan"/> starting from base.runtextpos for the next location a match could possibly start.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if a possible match was found; false if no more matches are possible.</returns>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.SilenceRegex_0.RunnerFactory.Runner.TryMatchAtCurrentPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Determine whether <paramref name="inputSpan"/> at base.runtextpos is a match for the regular expression.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if the regular expression matches at the current position; otherwise, false.</returns>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.BlackFrameRegex_1">
+            <summary>Custom <see cref="T:System.Text.RegularExpressions.Regex"/>-derived type for the BlackFrameRegex method.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.Instance">
+            <summary>Cached, thread-safe singleton instance.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.#ctor">
+            <summary>Initializes the instance.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.RunnerFactory">
+            <summary>Provides a factory for creating <see cref="T:System.Text.RegularExpressions.RegexRunner"/> instances to be used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.RunnerFactory.CreateInstance">
+            <summary>Creates an instance of a <see cref="T:System.Text.RegularExpressions.RegexRunner"/> used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.RunnerFactory.Runner">
+            <summary>Provides the runner that contains the custom logic implementing the specified regular expression.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.RunnerFactory.Runner.Scan(System.ReadOnlySpan{System.Char})">
+            <summary>Scan the <paramref name="inputSpan"/> starting from base.runtextstart for the next match.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.RunnerFactory.Runner.TryFindNextPossibleStartingPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Search <paramref name="inputSpan"/> starting from base.runtextpos for the next location a match could possibly start.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if a possible match was found; false if no more matches are possible.</returns>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.BlackFrameRegex_1.RunnerFactory.Runner.TryMatchAtCurrentPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Determine whether <paramref name="inputSpan"/> at base.runtextpos is a match for the regular expression.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if the regular expression matches at the current position; otherwise, false.</returns>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2">
+            <summary>Custom <see cref="T:System.Text.RegularExpressions.Regex"/>-derived type for the TimeoutAssignmentRegex method.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2.Instance">
+            <summary>Cached, thread-safe singleton instance.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2.#ctor">
+            <summary>Initializes the instance.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2.RunnerFactory">
+            <summary>Provides a factory for creating <see cref="T:System.Text.RegularExpressions.RegexRunner"/> instances to be used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2.RunnerFactory.CreateInstance">
+            <summary>Creates an instance of a <see cref="T:System.Text.RegularExpressions.RegexRunner"/> used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2.RunnerFactory.Runner">
+            <summary>Provides the runner that contains the custom logic implementing the specified regular expression.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2.RunnerFactory.Runner.Scan(System.ReadOnlySpan{System.Char})">
+            <summary>Scan the <paramref name="inputSpan"/> starting from base.runtextstart for the next match.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutAssignmentRegex_2.RunnerFactory.Runner.TryFindNextPossibleStartingPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Search <paramref name="inputSpan"/> starting from base.runtextpos for the next location a match could possibly start.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if a possible match was found; false if no more matches are possible.</returns>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3">
+            <summary>Custom <see cref="T:System.Text.RegularExpressions.Regex"/>-derived type for the TimeoutOsdChangeRegex method.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3.Instance">
+            <summary>Cached, thread-safe singleton instance.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3.#ctor">
+            <summary>Initializes the instance.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3.RunnerFactory">
+            <summary>Provides a factory for creating <see cref="T:System.Text.RegularExpressions.RegexRunner"/> instances to be used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3.RunnerFactory.CreateInstance">
+            <summary>Creates an instance of a <see cref="T:System.Text.RegularExpressions.RegexRunner"/> used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3.RunnerFactory.Runner">
+            <summary>Provides the runner that contains the custom logic implementing the specified regular expression.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3.RunnerFactory.Runner.Scan(System.ReadOnlySpan{System.Char})">
+            <summary>Scan the <paramref name="inputSpan"/> starting from base.runtextstart for the next match.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.TimeoutOsdChangeRegex_3.RunnerFactory.Runner.TryFindNextPossibleStartingPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Search <paramref name="inputSpan"/> starting from base.runtextpos for the next location a match could possibly start.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if a possible match was found; false if no more matches are possible.</returns>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4">
+            <summary>Custom <see cref="T:System.Text.RegularExpressions.Regex"/>-derived type for the FocusabilityAssignmentRegex method.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.Instance">
+            <summary>Cached, thread-safe singleton instance.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.#ctor">
+            <summary>Initializes the instance.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.RunnerFactory">
+            <summary>Provides a factory for creating <see cref="T:System.Text.RegularExpressions.RegexRunner"/> instances to be used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.RunnerFactory.CreateInstance">
+            <summary>Creates an instance of a <see cref="T:System.Text.RegularExpressions.RegexRunner"/> used by methods on <see cref="T:System.Text.RegularExpressions.Regex"/>.</summary>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.RunnerFactory.Runner">
+            <summary>Provides the runner that contains the custom logic implementing the specified regular expression.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.RunnerFactory.Runner.Scan(System.ReadOnlySpan{System.Char})">
+            <summary>Scan the <paramref name="inputSpan"/> starting from base.runtextstart for the next match.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.RunnerFactory.Runner.TryFindNextPossibleStartingPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Search <paramref name="inputSpan"/> starting from base.runtextpos for the next location a match could possibly start.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if a possible match was found; false if no more matches are possible.</returns>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.FocusabilityAssignmentRegex_4.RunnerFactory.Runner.TryMatchAtCurrentPosition(System.ReadOnlySpan{System.Char})">
+            <summary>Determine whether <paramref name="inputSpan"/> at base.runtextpos is a match for the regular expression.</summary>
+            <param name="inputSpan">The text being scanned by the regular expression.</param>
+            <returns>true if the regular expression matches at the current position; otherwise, false.</returns>
+        </member>
+        <member name="T:System.Text.RegularExpressions.Generated.Utilities">
+            <summary>Helper methods used by generated <see cref="T:System.Text.RegularExpressions.Regex"/>-derived implementations.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.Utilities.s_defaultTimeout">
+            <summary>Default timeout value set in <see cref="T:System.AppContext"/>, or <see cref="F:System.Text.RegularExpressions.Regex.InfiniteMatchTimeout"/> if none was set.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.Utilities.s_hasTimeout">
+            <summary>Whether <see cref="F:System.Text.RegularExpressions.Generated.Utilities.s_defaultTimeout"/> is non-infinite.</summary>
+        </member>
+        <member name="M:System.Text.RegularExpressions.Generated.Utilities.StackPush(System.Int32[]@,System.Int32@,System.Int32)">
+            <summary>Pushes 1 value onto the backtracking stack.</summary>
+        </member>
+        <member name="F:System.Text.RegularExpressions.Generated.Utilities.s_ascii_40FF030000000000000000">
+            <summary>Supports searching for characters in or not in ".0123456789".</summary>
+        </member>
+    </members>
+</doc>

@@ -16,6 +16,7 @@ public sealed class AnalysisService
     private readonly FileQueueManager _queueManager;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AnalysisService> _logger;
+    private int _pendingBatches;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AnalysisService"/> class.
@@ -30,6 +31,16 @@ public sealed class AnalysisService
         _logger = logger;
     }
 
+    /// <summary>Gets a value indicating whether analysis is currently in progress.</summary>
+    public bool IsAnalyzing => Volatile.Read(ref _pendingBatches) > 0;
+
+    /// <summary>
+    /// Signals that a batch of episodes is about to be submitted for analysis.
+    /// Must be called before firing the background task so that <see cref="IsAnalyzing"/>
+    /// is true by the time the caller starts polling.
+    /// </summary>
+    public void IncrementPendingBatch() => Interlocked.Increment(ref _pendingBatches);
+
     /// <summary>
     /// Runs the full analysis pipeline over the supplied episode requests.
     /// </summary>
@@ -41,31 +52,38 @@ public sealed class AnalysisService
         IProgress<double>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var plugin = Plugin.Instance ?? throw new InvalidOperationException("Plugin not initialized");
-
-        var queue = _queueManager.BuildQueue(requests, plugin.Configuration);
-
-        if (queue.Count == 0)
+        try
         {
-            _logger.LogWarning("No valid episodes in request — nothing to analyze");
-            return;
+            var plugin = Plugin.Instance ?? throw new InvalidOperationException("Plugin not initialized");
+
+            var queue = await _queueManager.BuildQueueAsync(requests, plugin.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (queue.Count == 0)
+            {
+                _logger.LogWarning("No valid episodes in request — nothing to analyze");
+                return;
+            }
+
+            _logger.LogInformation(
+                "Starting analysis: {Seasons} season(s), {Episodes} episode(s)",
+                queue.Count,
+                queue.Values.Sum(v => v.Count));
+
+            var task = new BaseItemAnalyzerTask(
+                _loggerFactory.CreateLogger<BaseItemAnalyzerTask>(),
+                _loggerFactory,
+                _queueManager);
+
+            await task.AnalyzeItemsAsync(
+                queue,
+                progress ?? new Progress<double>(),
+                cancellationToken)
+                .ConfigureAwait(false);
         }
-
-        _logger.LogInformation(
-            "Starting analysis: {Seasons} season(s), {Episodes} episode(s)",
-            queue.Count,
-            queue.Values.Sum(v => v.Count));
-
-        var task = new BaseItemAnalyzerTask(
-            _loggerFactory.CreateLogger<BaseItemAnalyzerTask>(),
-            _loggerFactory,
-            _queueManager);
-
-        await task.AnalyzeItemsAsync(
-            queue,
-            progress ?? new Progress<double>(),
-            cancellationToken)
-            .ConfigureAwait(false);
+        finally
+        {
+            Interlocked.Decrement(ref _pendingBatches);
+        }
     }
 
     /// <summary>
